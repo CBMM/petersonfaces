@@ -1,0 +1,12 @@
+[submodule "deps/tagging"]
+	path = deps/tagging
+	url = https://bitbucket.com/imalsogreg/tagging
+[submodule "deps/reflex-dom-contrib"]
+	path = deps/reflex-dom-contrib
+	url = https://github.com/reflex-frp/reflex-dom-contrib
+[submodule "deps/servant-snap"]
+	path = deps/servant-snap
+	url = https://github.com/haskell-servant/servant-snap
+[submodule "deps/servant-reflex"]
+	path = deps/servant-reflex
+	url = https://github.com/imalsogreg/servant-reflex
