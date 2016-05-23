@@ -1,18 +1,34 @@
 {-# language ScopedTypeVariables #-}
 {-# language RankNTypes #-}
 {-# language DeriveGeneric #-}
+{-# language CPP #-}
 
 module FacesWidget where
 
 -------------------------------------------------------------------------------
+import           Control.Monad.IO.Class (liftIO)
 import           Data.Default
 import           Reflex
 import           Reflex.Dom
 import qualified Data.Map as Mapp
 import           Data.Map (Map)
+import           GHCJS.DOM.EventM (on)
+#ifdef ghcjs_HOST_OS
+import           GHCJS.DOM.Element (getBoundingClientRect)
+import           GHCJS.DOM.ClientRect (getTop, getLeft)
+#endif
+import           GHCJS.DOM.HTMLElement
+-- import           GHCJS.DOM.MouseEvent (Mousemove)
 -------------------------------------------------------------------------------
 import           Face
 
+#ifndef ghcjs_HOST_OS
+getBoundingClientRect = undefined
+getTop = undefined
+getLeft = undefined
+#endif
+
+data PicUrl = PicUrl String
 
 -------------------------------------------------------------------------------
 data FacesWidgetConfig t = FacesWidgetConfig
@@ -22,10 +38,11 @@ data FacesWidgetConfig t = FacesWidgetConfig
   , facesWidgetConfig_intialPic     :: PicUrl
   , facesWidgetConfig_setPic        :: Event t PicUrl
   , facesWidgetConfig_select        :: Event t Int
-  , facesWidgetConfig_initialOffset :: (Double,Double)
-  , facesWidgetConfig_offset        :: Event t (Double,Double)
-  , facesWidgetConfig_initialZoon   :: Double
-  , facesWidgetConfig_zoom          :: Event t Double
+  }
+
+data ZoomRect = ZoomRect
+  { zrCenter :: (Double, Double)
+  , zrWidth  :: Double
   }
 
 data FacesWidget t = FacesWidget
@@ -34,13 +51,22 @@ data FacesWidget t = FacesWidget
   , facesWidget_selection :: Dynamic t (Maybe (Int, FaceLoc))
   }
 
-instance Default (FacesWidgetConfig t) where
+instance Reflex t => Default (FacesWidgetConfig t) where
   def = FacesWidgetConfig (constDyn mempty) mempty
                           never (PicUrl "") never never
-                          (0,0) never 1 never
 
+widgetEventCoords :: MonadWidget t m => El t -> m (Event t (Maybe (Double,Double)))
+widgetEventCoords el = do
+  let moveFunc (x,y) = do
+        Just cr <- getBoundingClientRect (_el_element el)
+        t <- realToFrac <$> (getTop cr :: IO Float)
+        l <- realToFrac <$> (getLeft cr :: IO Float)
+        return $ Just (fromIntegral  x - l, fromIntegral y - t)
+  performEvent $ fmap (liftIO . moveFunc) (domEvent Mousemove el)
 
 facesWidget :: forall t m.MonadWidget t m => FacesWidgetConfig t -> m (FacesWidget t)
-facesWidget cfg = elClass "div" "faces-widget" $ do
-
-  canv <- 
+facesWidget (FacesWidgetConfig attrs faces0 dFaces pic0 dPic sel) =
+  elClass "div" "faces-widget" $ do
+    imgAttrs <- holdDyn pic0 dPic >>= mapDyn (\(PicUrl url) -> "src" =: url)
+    elDynAttr "img" imgAttrs (return ())
+    undefined

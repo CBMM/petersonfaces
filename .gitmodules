@@ -10,3 +10,6 @@
 [submodule "deps/servant-reflex"]
 	path = deps/servant-reflex
 	url = https://github.com/imalsogreg/servant-reflex
+[submodule "deps/reflex-platform"]
+	path = deps/reflex-platform
+	url = https://github.com/reflex-frp/reflex-platform

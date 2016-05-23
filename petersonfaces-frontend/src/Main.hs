@@ -1,6 +1,7 @@
 module Main where
 
-import 
+import FacesWidget
+import Canvas2D
 import Reflex
 import Reflex.Dom
 
