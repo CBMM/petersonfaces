@@ -6,7 +6,7 @@
 module FacesWidget where
 
 -------------------------------------------------------------------------------
-import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Data.Default
 import           Reflex
 import           Reflex.Dom
@@ -21,12 +21,9 @@ import           GHCJS.DOM.HTMLElement
 -- import           GHCJS.DOM.MouseEvent (Mousemove)
 -------------------------------------------------------------------------------
 import           Face
+import           Canvas2D
+import           Thumbnail
 
-#ifndef ghcjs_HOST_OS
-getBoundingClientRect = undefined
-getTop = undefined
-getLeft = undefined
-#endif
 
 data PicUrl = PicUrl String
 
@@ -59,14 +56,18 @@ widgetEventCoords :: MonadWidget t m => El t -> m (Event t (Maybe (Double,Double
 widgetEventCoords el = do
   let moveFunc (x,y) = do
         Just cr <- getBoundingClientRect (_el_element el)
-        t <- realToFrac <$> (getTop cr :: IO Float)
+        t <- realToFrac <$> (getTop cr  :: IO Float)
         l <- realToFrac <$> (getLeft cr :: IO Float)
         return $ Just (fromIntegral  x - l, fromIntegral y - t)
   performEvent $ fmap (liftIO . moveFunc) (domEvent Mousemove el)
 
 facesWidget :: forall t m.MonadWidget t m => FacesWidgetConfig t -> m (FacesWidget t)
 facesWidget (FacesWidgetConfig attrs faces0 dFaces pic0 dPic sel) =
+
   elClass "div" "faces-widget" $ do
     imgAttrs <- holdDyn pic0 dPic >>= mapDyn (\(PicUrl url) -> "src" =: url)
-    elDynAttr "img" imgAttrs (return ())
+    sourcePic <- fst <$> elDynAttr' "img" imgAttrs (return ())
+    sourceCoords <- widgetEventCoords sourcePic
+
+    zoomArea <- canvas $ undefined
     undefined
