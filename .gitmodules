@@ -13,6 +13,3 @@
 [submodule "deps/reflex-platform"]
 	path = deps/reflex-platform
 	url = https://github.com/reflex-frp/reflex-platform
-[submodule "deps/reflex-dom"]
-	path = deps/reflex-dom
-	url = https://github.com/imalsogreg/reflex-dom
