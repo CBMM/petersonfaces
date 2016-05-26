@@ -25,7 +25,12 @@ import           GHCJS.DOM.ClientRect     (getTop, getLeft)
 import           GHCJS.DOM.Types          (IsGObject, HTMLCanvasElement, HTMLImageElement)
 import           GHCJS.DOM.CanvasRenderingContext2D
 import           GHCJS.DOM.HTMLImageElement
+import           GHCJS.DOM.EventM         (on, event)
+-- import           GHCJS.DOM.BoundingClientRect
 import           GHCJS.DOM.Element        (getClientTop, getClientLeft)
+import           GHCJS.DOM.MouseEvent     (getClientX, getClientY)
+import qualified GHCJS.DOM.Types          as T
+import qualified GHCJS.DOM.Element        as E
 
 data ZoomPos = ZoomPos
   { zpZoom    :: Double
@@ -81,6 +86,7 @@ data ScaledImageConfig t = ScaledImageConfig
   { sicInitialSource :: String
   , sicSetSource :: Event t String
   , sicAttributes :: Dynamic t (Map String String)
+  , sicImgStyle :: Dynamic t String
   , sicInitialOffset :: (Double, Double)
   , sicSetOffset :: Event t (Double, Double)
   , sicInitialScale :: Double
@@ -90,23 +96,27 @@ data ScaledImageConfig t = ScaledImageConfig
   }
 
 instance Reflex t => Default (ScaledImageConfig t) where
-  def = ScaledImageConfig "" never (constDyn mempty) (0,0) never 1 never def never
+  def = ScaledImageConfig "" never (constDyn mempty) (constDyn "") (0,0) never 1 never def never
 
 
 data ScaledImage t = ScaledImage
-  { siImage         :: HTMLImageElement
-  , siEl            :: El t
-  , siNaturalCoords :: Dynamic t ((Int,Int) -> (Double,Double)) -- TODO Don't like this
+  { siImage             :: HTMLImageElement
+  , siEl                :: El t
+  , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
+  , imageSpaceClick     :: Event t (Double, Double)
+  , imageSpaceMousemove :: Event t (Double, Double)
+  , imageSpaceMousedown :: Event t (Double, Double)
+  , imageSpaceMouseup   :: Event t (Double, Double)
   }
 
 
 -- | A widget supporting clipping, zooming, and translation of a source image.
 --   Composed of
 --     - a parent div fixed to the size of the source image,
---     - an intermiate div used as a clipping box
+--     - a cropping div
 --     - the source image
 scaledImage :: MonadWidget t m => ScaledImageConfig t -> m (ScaledImage t)
-scaledImage (ScaledImageConfig img0 dImg attrs trans0 dTrans scale0 dScale crop0 dCrop) = mdo
+scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScale crop0 dCrop) = mdo
   pb <- getPostBuild
 
   postImg <- delay 0 (leftmost [pb, () <$ dImg])
@@ -123,55 +133,74 @@ scaledImage (ScaledImageConfig img0 dImg attrs trans0 dTrans scale0 dScale crop0
   trans  <- holdDyn trans0 dTrans
   scale  <- holdDyn scale0 dScale
 
-  clippingDivAttrs <- mkClippingDivAttrs
+  parentAttrs <- mkParentAttrs `mapDyn` naturalSize
 
-  parentAttrs <- mkParentAttrs `mapDyn` naturalSize `apDyn` boxSize
+  (parentDiv, (img, imgSpace)) <- elDynAttr' "div" parentAttrs $ do
 
-  (resized, (parentDiv, (_,img))) <- resizeDetector $ elDynAttr' "div" parentAttrs $ do
+    croppingAttrs  <- mkCroppingAttrs
+      `mapDyn` naturalSize `apDyn` crop `apDyn` scale
+      `apDyn` trans        `apDyn` iStyle
 
-    (clipDiv, img) <- elDynAttr' "div" clippingDivAttrs $ do
+    imgAttrs <- mkImgAttrs
+      `mapDyn` imgSrc `apDyn` naturalSize `apDyn` scale
+      `apDyn`  trans  `apDyn` crop
 
-      imgAttrs <- mkImgAttrs `mapDyn` imgSrc `apDyn` naturalSize `apDyn` scale `apDyn` trans
-      img <- fst <$> elDynAttr' "img" imgAttrs (return ())
-      return img
+    (croppingDiv,img) <- elDynAttr' "div" croppingAttrs $
+      fst <$> elDynAttr' "img" imgAttrs (return ())
 
-    return (clipDiv, img)
+    imgSpace <- mkImgSpace `mapDyn` scale
+    return (img, imgSpace)
 
-  boxSize <- return naturalSize -- TODO totally wrong
+  clicks <- relativizeEvent (_el_element img) imgSpace E.click
+  moves  <- relativizeEvent (_el_element img) imgSpace E.mouseMove
+  downs  <- relativizeEvent (_el_element img) imgSpace E.mouseDown
+  ups    <- relativizeEvent (_el_element img) imgSpace E.mouseUp
 
-  return $ ScaledImage htmlImg parentDiv (constDyn (const (1,1)))
+  return $ ScaledImage htmlImg parentDiv imgSpace
+    clicks moves downs ups
 
   where
-    mkParentAttrs (naturalWid, naturalHei) boxSize =
+    mkParentAttrs (naturalWid, naturalHei) =
         "class" =: "scaled-image-top"
-     <> "style" =: ("overflow:hidden;width:" ++ show naturalWid ++ "px;height:" ++ show naturalHei ++ "px;")
-    mkClippingDivAttrs  = return $ constDyn mempty
-    mkImgAttrs src (naturalWid, naturalHei) scale (offX, offY) =
-      let w :: Int = floor $ fromIntegral naturalWid * scale
-          x :: Int = floor offX
-          y :: Int = floor offY
+     <> "style" =: ("position:relative;overflow:hidden;width:" ++ show naturalWid
+                    ++ "px;height:" ++ show naturalHei ++ "px;")
+
+    mkCroppingAttrs (naturalWid, naturalHei) cr scale (offX, offY) extStyle =
+     let w :: Int = round $ fI (naturalWid - cropLeft cr - cropRight  cr) * scale
+         h :: Int = round $ fI (naturalHei - cropTop  cr - cropBottom cr) * scale
+         x :: Int = round $ fI (cropLeft cr) * scale + offX
+         y :: Int = round $ fI (cropTop  cr) * scale + offY
+     in  "style" =: ("width:" ++ show w ++ "px;height:" ++ show h ++ "px;" ++
+                     "left:"  ++ show x ++ "px;top:"    ++ show y ++ "px;" ++
+                     "position:relative;overflow:hidden;" ++ extStyle ++
+                    "box-shadow: 10px 10px 10px rgba(0,0,0,0.1);")
+
+    mkImgAttrs src (naturalWid, naturalHei) scale (offX, offY) cr =
+      let w :: Int = round $ fromIntegral naturalWid * scale
+          x :: Int = round $ negate $ fI (cropLeft cr) * scale
+          y :: Int = round $ negate $ fI (cropTop  cr) * scale
       in  "src"   =: src
-       <> "style" =: ("width:" ++ show w ++ "px;position:absolute;top:" ++ show y ++ "px;left:" ++  show x ++ "px;")
+       <> "style" =: ("position:absolute;left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
+                     ++ "width:" ++ show w ++ "px;")
 
-  -- imgAttrs <- combineDyn (\s a -> a <> "class" =: "scaled-image" <> "src" =: s) srcImg attrs
-  -- (resized, imgEl) <- resizeDetector $ fst <$> elDynAttr' "img" imgAttrs (return ())
-  -- let img = castToHTMLImageElement (_el_element imgEl)
-  --     imgEvents = leftmost [pb, resized]
-  --     fI = fromIntegral :: Int -> Double
-  -- imgInfo <- performEvent $ ffor imgEvents $ \() -> liftIO $ do
-  --   widNat <- getNaturalWidth img
-  --   heiNat <- getNaturalHeight img
-  --   wid    <- getWidth img
-  --   hei    <- getHeight img
-  --   return ((widNat,heiNat),(wid,hei))
-  -- dynText =<< holdDyn "" (fmap show imgInfo)
-  -- mouseCoordsFn <- holdDyn (\(x,y) -> (fI x, fI y)) $ ffor imgInfo $
-  --   \((widNat,heiNat),(wid,hei)) (mX,mY) ->
-  --   let x' = fI mX * fI widNat / fI wid
-  --       y' = fI mY * fI heiNat / fI hei
-  --   in  (x',y')
-  -- return $ ScaledImage img imgEl mouseCoordsFn
+    mkImgSpace scale = \(x,y) ->
+      (x / scale, y / scale)
 
+    relativizeEvent e f eventName = do
+      evs <- wrapDomEvent e (`on` eventName) $ do
+        ev   <- event
+        Just br <- getBoundingClientRect e
+        xOff <- (r2 . negate) <$> getLeft br
+        yOff <- (r2 . negate) <$> getTop  br
+        liftM2 (,) (((+ xOff). fI) <$> getClientX ev) (((+ yOff) . fI) <$> getClientY ev)
+      return $ attachWith ($) (current f) evs
+
+
+fI :: (Integral a, RealFrac b) => a -> b
+fI = fromIntegral
+
+r2 :: (Real a, Fractional b) => a -> b
+r2 = realToFrac
 
 #ifndef ghcjs_HOST_OS
 fromJSValUnchecked = error ""
