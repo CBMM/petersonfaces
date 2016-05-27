@@ -83,8 +83,8 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = do
           (tag (current $ siNaturalSize bigPic) (domEvent Load (siEl bigPic)))
 
         uncenteredOffsets =
-          ffor (attach
-                (current $ siNaturalSize bigPic) (leftmost [imgLoadPosition, thumbPosUpdates])) $ \((w,h),(x,y)) ->
+          ffor (attach (current $ siNaturalSize bigPic)
+                (leftmost [imgLoadPosition, thumbPosUpdates])) $ \((w,h),(x,y)) ->
             (fI w/2 - x, fI h/2 - y)
 
     sel <- holdDyn Nothing never
@@ -98,18 +98,23 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = do
                       , sicSetOffset     = traceEvent "trace" uncenteredOffsets
                       }
 
+    -- subPics <- foldDyn ($) mempty subPicEvents
+
+    -- subPicEvents <- selectViewListWithKey sel (subPicture zoom focus)
+
     thumbPic <- elAttr "div" ("style" =: "position:absolute;opacity:0.5;") $
       scaledImage def { sicInitialSource = srcImg
                       , sicInitialScale  = 0.3
                       }
-
-
 
     let thumbPosUpdates = imageSpaceClick thumbPic
     performEvent ((liftIO . putStrLn . ("thumbPosUpdate: " ++ ) . show) <$> thumbPosUpdates )
     performEvent ((liftIO . putStrLn . ("uncenteredPos: " ++ ) . show) <$> uncenteredOffsets )
 
     return $ Thumbnail undefined undefined undefined
+
+-- subPicture :: MonadWidget t m => Dynamic t Double -> Dynamic t (Double,Double) 
+
 
 -- | Crop structure contains Ints as a reminder that croppind
 --   is always in pixel units of the original image
@@ -242,6 +247,16 @@ fI = fromIntegral
 r2 :: (Real a, Fractional b) => a -> b
 r2 = realToFrac
 
+selectMayViewListWithKey :: forall t m k v a. (MonadWidget t m, Ord k)
+                         => Dynamic t (Maybe k)
+                         -> Dynamic t (Map k v)
+                         -> (k -> Dynamic t v -> Dynamic t Bool -> m (Event t a))
+                         -> m (Event t (k,a))
+selectMayViewListWithKey sel vals mkChild = do
+  let selectionDemux = demux selection
+  listWithKey vals $ \k v -> do
+    selected <- getDemuxed selectionDemux (Just k)
+    self <- mkChild k v 
 #ifndef ghcjs_HOST_OS
 fromJSValUnchecked = error ""
 toJSVal = error ""
