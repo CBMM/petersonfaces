@@ -1,6 +1,7 @@
 {-# language CPP #-}
 {-# language RecursiveDo #-}
 {-# language KindSignatures #-}
+{-# language LambdaCase #-}
 {-# language RankNTypes #-}
 {-# language TypeFamilies #-}
 {-# language ScopedTypeVariables #-}
@@ -32,10 +33,10 @@ import           GHCJS.DOM.MouseEvent     (getClientX, getClientY)
 import qualified GHCJS.DOM.Types          as T
 import qualified GHCJS.DOM.Element        as E
 
-data ZoomPos = ZoomPos
-  { zpZoom    :: Double
-  , zpCenter  :: Coord
-  } deriving (Eq, Show)
+-- data ZoomPos = ZoomPos
+--   { zpZoom    :: Double
+--   , zpCenter  :: Coord
+--   } deriving (Eq, Show)
 
 data Coord = Coord
   { coordX :: Double
@@ -50,13 +51,17 @@ data BoundingBox = BoundingBox
 data ThumbnailConfig t = ThumbnailConfig
   { tcSourceImage :: String
   , tcAttributes  :: Dynamic t (Map String String)
-  , tcZoom        :: Event t ZoomPos
+  , tcZoom        :: Event t BoundingBox
   , tcBoundings   :: Event t (Int, Maybe BoundingBox)
   }
 
+instance Reflex t => Default (ThumbnailConfig t) where
+  def = ThumbnailConfig "" (constDyn mempty) never never
+
 data Thumbnail t = Thumbnail
-  { tElement :: El t
-  , tBoxes   :: Dynamic t (Map Int BoundingBox)
+  { tElement   :: El t
+  , tBoxes     :: Dynamic t (Map Int BoundingBox)
+  , tSelection :: Dynamic t (Maybe (Int, BoundingBox))
   }
 
 
@@ -64,11 +69,47 @@ data Thumbnail t = Thumbnail
 --   Movement is achieved through clicks and mousewheels in a 'picture-in-picture' view
 --   in the corner of the widget
 thumbnail :: MonadWidget t m => ThumbnailConfig t -> m (Thumbnail t)
-thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) =
-  divClass "thumbnail-widget" $ do
-    widgetAttrs <- return attrs -- Add default attributes?
-    elDynAttr "div" widgetAttrs $ do
-      undefined
+thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = do
+  pb <- getPostBuild
+  elAttr "div" ("class" =: "thumbnail-widget" <> "style" =: "position:relative;") $ mdo
+
+    let thumbPosition = ffor (updated $ siNaturalSize bigPic) $ \(natW, natH) ->
+          (0.9 * fI natW :: Double, 0 :: Double)
+
+    zoom  <- holdDyn (1 :: Double) never
+    focus <- holdDyn (1 :: Double,1 :: Double) (leftmost [imgLoadPosition, thumbPosUpdates])
+
+    let imgLoadPosition = fmap (\(natW,natH) -> (fI natW / 2, fI natH / 2))
+          (tag (current $ siNaturalSize bigPic) (domEvent Load (siEl bigPic)))
+
+        uncenteredOffsets =
+          ffor (attach
+                (current $ siNaturalSize bigPic) (leftmost [imgLoadPosition, thumbPosUpdates])) $ \((w,h),(x,y)) ->
+            (fI w/2 - x, fI h/2 - y)
+
+    sel <- holdDyn Nothing never
+
+    bigPicAttrs <- forDyn sel $ \case
+      Nothing -> "class" =: "big-picture"
+      Just i  -> "class" =: "big-picture bp-darkened"
+
+    bigPic   <- elAttr "div" ("style" =: "position:absolute;") $
+      scaledImage def { sicInitialSource = srcImg
+                      , sicSetOffset     = traceEvent "trace" uncenteredOffsets
+                      }
+
+    thumbPic <- elAttr "div" ("style" =: "position:absolute;opacity:0.5;") $
+      scaledImage def { sicInitialSource = srcImg
+                      , sicInitialScale  = 0.3
+                      }
+
+
+
+    let thumbPosUpdates = imageSpaceClick thumbPic
+    performEvent ((liftIO . putStrLn . ("thumbPosUpdate: " ++ ) . show) <$> thumbPosUpdates )
+    performEvent ((liftIO . putStrLn . ("uncenteredPos: " ++ ) . show) <$> uncenteredOffsets )
+
+    return $ Thumbnail undefined undefined undefined
 
 -- | Crop structure contains Ints as a reminder that croppind
 --   is always in pixel units of the original image
@@ -102,6 +143,7 @@ instance Reflex t => Default (ScaledImageConfig t) where
 data ScaledImage t = ScaledImage
   { siImage             :: HTMLImageElement
   , siEl                :: El t
+  , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
   , imageSpaceClick     :: Event t (Double, Double)
   , imageSpaceMousemove :: Event t (Double, Double)
@@ -123,8 +165,6 @@ scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScal
   naturalSize :: Dynamic t (Int,Int) <- holdDyn (1 :: Int, 1 :: Int) =<<
     performEvent (ffor (domEvent Load img) $ \() ->
                    (,) <$> (getNaturalWidth htmlImg) <*> (getNaturalHeight htmlImg))
-
-  display naturalSize
 
   let htmlImg = castToHTMLImageElement (_el_element img)
 
@@ -156,7 +196,7 @@ scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScal
   downs  <- relativizeEvent (_el_element img) imgSpace E.mouseDown
   ups    <- relativizeEvent (_el_element img) imgSpace E.mouseUp
 
-  return $ ScaledImage htmlImg parentDiv imgSpace
+  return $ ScaledImage htmlImg parentDiv naturalSize imgSpace
     clicks moves downs ups
 
   where

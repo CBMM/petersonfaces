@@ -20,7 +20,14 @@ import Reflex.Dom
 import Thumbnail
 
 main :: IO ()
-main = mainWidget run
+main = mainWidget run'
+
+run' :: MonadWidget t m => m ()
+run' = do
+  content <- fmap fst $ elAttr' "div" ("class" =: "content") $ do
+    tn <- thumbnail def { tcSourceImage = "https://upload.wikimedia.org/wikipedia/commons/3/3b/Rabbit_in_montana.jpg" }
+    return ()
+  return ()
 
 run :: forall t m.MonadWidget t m => m ()
 run = mdo
