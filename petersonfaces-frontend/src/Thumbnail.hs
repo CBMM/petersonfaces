@@ -10,6 +10,7 @@ module Thumbnail where
 
 import           Control.Monad            (liftM2)
 import           Control.Monad.IO.Class   (MonadIO, liftIO)
+import           Data.Bool
 import           Data.Default             (Default, def)
 import           Data.Map                 (Map)
 import qualified Data.Map                 as Map
@@ -26,17 +27,14 @@ import           GHCJS.DOM.ClientRect     (getTop, getLeft)
 import           GHCJS.DOM.Types          (IsGObject, HTMLCanvasElement, HTMLImageElement)
 import           GHCJS.DOM.CanvasRenderingContext2D
 import           GHCJS.DOM.HTMLImageElement
-import           GHCJS.DOM.EventM         (on, event)
--- import           GHCJS.DOM.BoundingClientRect
+import           GHCJS.DOM.EventM         (on, event, stopPropagation, preventDefault)
+import qualified GHCJS.DOM.ClientRect     as CR
 import           GHCJS.DOM.Element        (getClientTop, getClientLeft)
 import           GHCJS.DOM.MouseEvent     (getClientX, getClientY)
 import qualified GHCJS.DOM.Types          as T
+import           GHCJS.DOM.WheelEvent
 import qualified GHCJS.DOM.Element        as E
 
--- data ZoomPos = ZoomPos
---   { zpZoom    :: Double
---   , zpCenter  :: Coord
---   } deriving (Eq, Show)
 
 data Coord = Coord
   { coordX :: Double
@@ -44,7 +42,7 @@ data Coord = Coord
   } deriving (Eq, Show, Ord)
 
 data BoundingBox = BoundingBox
-  { bbTopLeft :: Coord
+  { bbTopLeft  :: Coord
   , bbBotRight :: Coord
   } deriving (Eq, Show, Ord)
 
@@ -69,52 +67,112 @@ data Thumbnail t = Thumbnail
 --   Movement is achieved through clicks and mousewheels in a 'picture-in-picture' view
 --   in the corner of the widget
 thumbnail :: MonadWidget t m => ThumbnailConfig t -> m (Thumbnail t)
-thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = do
+thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
   pb <- getPostBuild
-  elAttr "div" ("class" =: "thumbnail-widget" <> "style" =: "position:relative;") $ mdo
+  (tnWidget, tn) <- elStopPropagationNS Nothing "div" Wheel $ elAttr' "div" ("class" =: "thumbnail-widget"
+                                                                               <> "style" =: "position:relative;") $ mdo
 
     let thumbPosition = ffor (updated $ siNaturalSize bigPic) $ \(natW, natH) ->
           (0.9 * fI natW :: Double, 0 :: Double)
 
-    zoom  <- holdDyn (1 :: Double) never
+    zoom  <- foldDyn ($) 1 zooms
     focus <- holdDyn (1 :: Double,1 :: Double) (leftmost [imgLoadPosition, thumbPosUpdates])
 
     let imgLoadPosition = fmap (\(natW,natH) -> (fI natW / 2, fI natH / 2))
           (tag (current $ siNaturalSize bigPic) (domEvent Load (siEl bigPic)))
 
-        uncenteredOffsets =
-          ffor (attach (current $ siNaturalSize bigPic)
-                (leftmost [imgLoadPosition, thumbPosUpdates])) $ \((w,h),(x,y)) ->
-            (fI w/2 - x, fI h/2 - y)
-
-    sel <- holdDyn Nothing never
-
     bigPicAttrs <- forDyn sel $ \case
       Nothing -> "class" =: "big-picture"
       Just i  -> "class" =: "big-picture bp-darkened"
+              <> "style" =: ""
+           -- "filter: blur(2px) brightness(90%); -webkit-filter: blur(2px) brightness(90%);"
 
     bigPic   <- elAttr "div" ("style" =: "position:absolute;") $
       scaledImage def { sicInitialSource = srcImg
-                      , sicSetOffset     = traceEvent "trace" uncenteredOffsets
+                      , sicAttributes    = bigPicAttrs
+                      , sicSetOffset     = uncenteredOffsets bigPic thumbPosUpdates
+                      , sicSetScale      = updated zoom
                       }
 
-    -- subPics <- foldDyn ($) mempty subPicEvents
 
-    -- subPicEvents <- selectViewListWithKey sel (subPicture zoom focus)
+    selAndSubPics <- foldDyn applySubPicCommand (Just 0, testBoxes) subPicEvents
+    sel :: Dynamic t (Maybe Int) <- mapDyn fst selAndSubPics
+    subPics :: Dynamic t (Map Int BoundingBox) <- mapDyn snd selAndSubPics
 
-    thumbPic <- elAttr "div" ("style" =: "position:absolute;opacity:0.5;") $
+    subPicEvents <- selectMayViewListWithKey sel subPics
+      (subPicture srcImg bigPic zoom focus)
+
+    thumbPic :: ScaledImage t <- elAttr "div"
+      ("style" =: "position:absolute;opacity:0.5;" <> "class" =: "thumbnail-navigator") $
       scaledImage def { sicInitialSource = srcImg
                       , sicInitialScale  = 0.3
                       }
 
     let thumbPosUpdates = imageSpaceClick thumbPic
-    performEvent ((liftIO . putStrLn . ("thumbPosUpdate: " ++ ) . show) <$> thumbPosUpdates )
-    performEvent ((liftIO . putStrLn . ("uncenteredPos: " ++ ) . show) <$> uncenteredOffsets )
 
     return $ Thumbnail undefined undefined undefined
+  cWheeled <- wrapDomEvent (_el_element tnWidget) (`on` E.wheel) $ do
+        ev <- event
+        y <- getDeltaY ev
+        liftIO $ print y
+        preventDefault
+        stopPropagation
+        return y
+  let zooms = fmap (\n z -> z * (1 + n/200)) cWheeled
+  return tn
 
--- subPicture :: MonadWidget t m => Dynamic t Double -> Dynamic t (Double,Double) 
+data SubPicCommand = DelSubPic Int
+                   | AddSubPic Int BoundingBox
+                   | ModifyBox Int BoundingBox
+                   | SelBox Int
+                   | DeselectBoxes
 
+uncenteredOffsets :: Reflex t => ScaledImage t -> Event t (Double, Double) -> Event t (Double, Double)
+uncenteredOffsets bigPic thumbPosUpdates =
+  ffor (attach (current $ siNaturalSize bigPic) thumbPosUpdates) $ \((w,h),(x,y)) ->
+  (fI w/2 - x, fI h/2 - y)
+
+
+subPicture :: MonadWidget t m
+           => String -- ^ image src
+           -> ScaledImage t
+           -> Dynamic t Double -- ^ zoom
+           -> Dynamic t (Double,Double) -- ^ focus point
+           -> Int -- ^ Key
+           -> Dynamic t BoundingBox -- ^ Result rect
+           -> Dynamic t Bool -- ^ Selected?
+           -> m (Event t SubPicCommand)
+subPicture srcImg bigPic zoom focus k rect isSel = mdo
+  pb <- getPostBuild
+
+  subPicAttrs <- mkSubPicAttrs `mapDyn` isSel
+  (e,(img,dels)) <- elDynAttr' "div" subPicAttrs $ do
+
+    img <- scaledImage def { sicInitialSource   = srcImg
+                           , sicSetScale        = updated zoom
+                           , sicSetOffset       = uncenteredOffsets bigPic $ leftmost [updated focus, tag (current focus) pb]
+                           , sicSetBounding     = fmap Just (updated rect)
+                           }
+    dels <- fmap (DelSubPic k <$) (button "x")
+    return (img,dels)
+
+  return $ leftmost [ SelBox k <$ domEvent Click e
+                    , dels]
+
+  where mkSubPicAttrs b = "class" =: "sub-picture-top"
+                       <> "style" =: ("position:absolute;top:0px;left:0px"
+                                      ++ bool unselstyle selstyle b)
+          where unselstyle = "border: 1px solid black;"
+                selstyle   = "border: 1px solid black; box-shadow: 0px 0px 10px white;"
+
+applySubPicCommand :: (Int, SubPicCommand)
+                   -> (Maybe Int, Map Int BoundingBox)
+                   -> (Maybe Int, Map Int BoundingBox)
+applySubPicCommand (_, DelSubPic k) (_,m) = (Nothing, Map.delete k m)
+applySubPicCommand (_, AddSubPic k b) (_,m) = (Just k, Map.insert k b m)
+applySubPicCommand (_, ModifyBox k b) (_,m) = (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
+applySubPicCommand (_, SelBox k) (_,m) = (Just k, m)
+applySubPicCommand (_, DeselectBoxes) (_,m) = (Nothing,m)
 
 -- | Crop structure contains Ints as a reminder that croppind
 --   is always in pixel units of the original image
@@ -137,12 +195,13 @@ data ScaledImageConfig t = ScaledImageConfig
   , sicSetOffset :: Event t (Double, Double)
   , sicInitialScale :: Double
   , sicSetScale :: Event t Double
-  , sicInitialCrop :: Crop
-  , sicSetCrop :: Event t Crop
+  , sicInitialBounding :: Maybe BoundingBox
+  , sicSetBounding :: Event t (Maybe BoundingBox)
   }
 
 instance Reflex t => Default (ScaledImageConfig t) where
-  def = ScaledImageConfig "" never (constDyn mempty) (constDyn "") (0,0) never 1 never def never
+  def = ScaledImageConfig "" never (constDyn mempty)
+    (constDyn "") (0,0) never 1 never def never
 
 
 data ScaledImage t = ScaledImage
@@ -163,7 +222,8 @@ data ScaledImage t = ScaledImage
 --     - a cropping div
 --     - the source image
 scaledImage :: MonadWidget t m => ScaledImageConfig t -> m (ScaledImage t)
-scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScale crop0 dCrop) = mdo
+scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans
+             scale0 dScale bounding0 dBounding) = mdo
   pb <- getPostBuild
 
   postImg <- delay 0 (leftmost [pb, () <$ dImg])
@@ -173,22 +233,28 @@ scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScal
 
   let htmlImg = castToHTMLImageElement (_el_element img)
 
-  imgSrc <- holdDyn img0   dImg
-  crop   <- holdDyn crop0  dCrop
-  trans  <- holdDyn trans0 dTrans
-  scale  <- holdDyn scale0 dScale
+  widgetSize <- holdDyn (1,1) =<< performEvent
+    (ffor (leftmost [pb, domEvent Load img, resizes]) $ \() -> do
+        Just r <- E.getBoundingClientRect (_el_element parentDiv)
+        liftM2 (,) (CR.getWidth r) (CR.getHeight r))
+
+  imgSrc     <- holdDyn img0   dImg
+  bounding   <- holdDyn bounding0 dBounding
+  trans      <- holdDyn trans0 dTrans
+  scale      <- holdDyn scale0 dScale
 
   parentAttrs <- mkParentAttrs `mapDyn` naturalSize
 
-  (parentDiv, (img, imgSpace)) <- elDynAttr' "div" parentAttrs $ do
+  (resizes,(parentDiv, (img, imgSpace))) <- resizeDetector $
+   elDynAttr' "div" parentAttrs $ do
 
     croppingAttrs  <- mkCroppingAttrs
-      `mapDyn` naturalSize `apDyn` crop `apDyn` scale
-      `apDyn` trans        `apDyn` iStyle
+      `mapDyn` naturalSize `apDyn` bounding `apDyn` scale
+      `apDyn`  trans       `apDyn` attrs    `apDyn` iStyle
 
     imgAttrs <- mkImgAttrs
       `mapDyn` imgSrc `apDyn` naturalSize `apDyn` scale
-      `apDyn`  trans  `apDyn` crop
+      `apDyn`  trans  `apDyn` bounding
 
     (croppingDiv,img) <- elDynAttr' "div" croppingAttrs $
       fst <$> elDynAttr' "img" imgAttrs (return ())
@@ -210,23 +276,50 @@ scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScal
      <> "style" =: ("position:relative;overflow:hidden;width:" ++ show naturalWid
                     ++ "px;height:" ++ show naturalHei ++ "px;")
 
-    mkCroppingAttrs (naturalWid, naturalHei) cr scale (offX, offY) extStyle =
-     let w :: Int = round $ fI (naturalWid - cropLeft cr - cropRight  cr) * scale
-         h :: Int = round $ fI (naturalHei - cropTop  cr - cropBottom cr) * scale
-         x :: Int = round $ fI (cropLeft cr) * scale + offX
-         y :: Int = round $ fI (cropTop  cr) * scale + offY
-     in  "style" =: ("width:" ++ show w ++ "px;height:" ++ show h ++ "px;" ++
-                     "left:"  ++ show x ++ "px;top:"    ++ show y ++ "px;" ++
-                     "position:relative;overflow:hidden;" ++ extStyle ++
-                    "box-shadow: 10px 10px 10px rgba(0,0,0,0.1);")
+    mkCroppingAttrs (naturalWid, naturalHei) bnd scale (offX, offY) attrs extStyle =
+     let sizingStyle = case bnd of
+           Nothing ->
+             let w :: Int = round $ fI naturalWid * scale
+                 h :: Int = round $ fI naturalHei * scale
+                 x :: Int = round $ offX
+                 y :: Int = round $ offY
+             in  "width:" ++ show w ++ "px; height: " ++ show h ++ "px; left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
+           Just (BoundingBox (Coord cX cY) (Coord bW bH)) ->
+             let w :: Int = round $ bW * scale
+                      -- round $ fI (naturalWid - cropLeft cr - cropRight  cr) * scale
+                 h :: Int = round $ bH * scale
+                      -- round $ fI (naturalHei - cropTop  cr - cropBottom cr) * scale
+                 x :: Int = round $ (bW / 2) * scale + offX
+                      -- round $ fI (cropLeft cr) * scale + offX
+                 y :: Int = round $ (bH / 2) * scale + offY
+                      -- round $ fI (cropTop  cr) * scale + offY
+             in ("width:" ++ show w ++ "px;height:" ++ show h ++ "px;" ++
+                      "left:"  ++ show x ++ "px;top:"    ++ show y ++ "px;")
 
-    mkImgAttrs src (naturalWid, naturalHei) scale (offX, offY) cr =
-      let w :: Int = round $ fromIntegral naturalWid * scale
-          x :: Int = round $ negate $ fI (cropLeft cr) * scale
-          y :: Int = round $ negate $ fI (cropTop  cr) * scale
-      in  "src"   =: src
-       <> "style" =: ("position:absolute;left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
-                     ++ "width:" ++ show w ++ "px;")
+         baseStyle = ("position:relative;overflow:hidden;" ++
+                      "box-shadow: 10px 10px 10px rgba(0,0,0,0.1);")
+
+         style = case Map.lookup "style" attrs of
+           Nothing -> baseStyle ++ sizingStyle ++ extStyle
+           Just s  -> baseStyle ++ sizingStyle ++ s ++ extStyle
+     in Map.insert "style" style ("class" =: "cropping-div" <> attrs)
+
+    mkImgAttrs src (naturalWid, naturalHei) scale (offX, offY) bb  =
+     let posPart = case bb of
+           Nothing ->
+             let w :: Int = round $ fI naturalWid * scale
+                 h :: Int = round $ fI naturalHei * scale
+             in "width:" ++ show w ++ "px; height: " ++ show h ++ "px; position:absolute; left: 0px; top 0px;"
+           Just (BoundingBox (Coord cX cY) (Coord bW bH)) ->
+             let w :: Int = round $ fromIntegral naturalWid * scale
+                 x :: Int = round $ negate (bW / 2) * scale
+                      -- round $ negate $ fI (cropLeft cr) * scale
+                 y :: Int = round $ negate (bH / 2) * scale
+                      -- round $ negate $ fI (cropTop  cr) * scale
+             in "position:absolute;left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
+                ++ "width:" ++ show w ++ "px;"
+      in   "src"   =: src
+        <> "style" =: posPart
 
     mkImgSpace scale = \(x,y) ->
       (x / scale, y / scale)
@@ -240,6 +333,12 @@ scaledImage (ScaledImageConfig img0 dImg attrs iStyle trans0 dTrans scale0 dScal
         liftM2 (,) (((+ xOff). fI) <$> getClientX ev) (((+ yOff) . fI) <$> getClientY ev)
       return $ attachWith ($) (current f) evs
 
+    boundingToCrop (natWid, natHei) (BoundingBox (Coord cX cY) (Coord w h)) =
+      Crop { cropLeft   = round (cX - w / 2 :: Double)
+           , cropTop    = round (cY - h / 2 :: Double)
+           , cropRight  = round (fI natWid - (cX + w / 2 :: Double))
+           , cropBottom = round (fI natHei - (cY + h / 2 :: Double))
+           }
 
 fI :: (Integral a, RealFrac b) => a -> b
 fI = fromIntegral
@@ -253,10 +352,13 @@ selectMayViewListWithKey :: forall t m k v a. (MonadWidget t m, Ord k)
                          -> (k -> Dynamic t v -> Dynamic t Bool -> m (Event t a))
                          -> m (Event t (k,a))
 selectMayViewListWithKey sel vals mkChild = do
-  let selectionDemux = demux selection
-  listWithKey vals $ \k v -> do
+  let selectionDemux = demux sel
+  children <- listWithKey vals $ \k v -> do
     selected <- getDemuxed selectionDemux (Just k)
-    self <- mkChild k v 
+    selfEvents <- mkChild k v selected
+    return $ fmap ((,) k) selfEvents
+  fmap switchPromptlyDyn $ mapDyn (leftmost . Map.elems) children
+
 #ifndef ghcjs_HOST_OS
 fromJSValUnchecked = error ""
 toJSVal = error ""
@@ -296,3 +398,9 @@ apDyn :: MonadWidget t m => m (Dynamic t (a -> b)) -> Dynamic t a -> m (Dynamic 
 apDyn mf a = do
   f <- mf
   combineDyn ($) f a
+
+testBoxes :: Map Int BoundingBox
+testBoxes = Map.fromList
+  [ (0, BoundingBox (Coord 100 100) (Coord 200 200))
+  , (1, BoundingBox (Coord 300 300) (Coord 200 100))
+  ]

@@ -22,10 +22,12 @@ import Thumbnail
 main :: IO ()
 main = mainWidget run'
 
+testimg = "file:///Users/greghale/Programming/caffe/examples/images/fish-bike.jpg"
+
 run' :: MonadWidget t m => m ()
 run' = do
   content <- fmap fst $ elAttr' "div" ("class" =: "content") $ do
-    tn <- thumbnail def { tcSourceImage = "https://upload.wikimedia.org/wikipedia/commons/3/3b/Rabbit_in_montana.jpg" }
+    tn <- thumbnail def { tcSourceImage = testimg }
     return ()
   return ()
 
@@ -53,7 +55,6 @@ run = mdo
                           , sicSetScale  = updated scale
                           , sicSetOffset = fmapMaybe id $ updated offset
                           , sicImgStyle  = constDyn "box-shadow: 10px 10px 10px black;"
-                          , sicSetCrop   = fmapMaybe id $ updated crop
                           }
     -- let clks :: Event t (Int,Int) = domEvent Mousedown (siEl si)
     --     clkInfo = attachWith ($) (current $ siNaturalCoords si) clks
