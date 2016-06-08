@@ -8,6 +8,8 @@ module Main where
 import Control.Applicative (liftA2)
 import Control.Monad (liftM2, liftM)
 import Data.Bool
+import Data.Maybe
+import Data.Monoid
 import FacesWidget
 import Canvas2D
 import Text.Read
@@ -17,17 +19,22 @@ import GHCJS.DOM.EventM
 import GHCJS.DOM.WheelEvent
 import Reflex
 import Reflex.Dom
+import ScaledImage
 import Thumbnail
 
 main :: IO ()
 main = mainWidget run'
 
-testimg = "file:///Users/greghale/Programming/caffe/examples/images/fish-bike.jpg"
+testimg  = "file:///Users/greghale/Programming/caffe/examples/images/fish-bike.jpg"
+testimg' = "file:///home/greghale/Documents/bicycle.jpg"
 
 run' :: MonadWidget t m => m ()
 run' = do
-  content <- fmap fst $ elAttr' "div" ("class" =: "content") $ do
-    tn <- thumbnail def { tcSourceImage = testimg }
+  wid :: Dynamic t (Maybe Double) <- readInput "Width" 400
+  attrs <- forDyn wid $ \w -> "style" =: ("width:" <> show (fromMaybe 100 w) <> "px;")
+  content <- fmap fst $ elDynAttr' "div" attrs $ do
+    tn <- thumbnail def { tcSourceImage = testimg'
+                        , tcAttributes   = attrs}
     return ()
   return ()
 
@@ -44,18 +51,14 @@ run = mdo
       `mapWidget` readInput "x offset" 0
       `apWidget`  readInput "y offset" 0
 
-    crop :: Dynamic t (Maybe Crop) <- liftA4 Crop
-      `mapWidget` readInput "crop left"   0
-      `apWidget`  readInput "crop top"    0
-      `apWidget`  readInput "crop right"  0
-      `apWidget`  readInput "crop bottom" 0
-
-    si <- scaledImage def { sicInitialSource = "http://cbmm.github.io/images/GitHub.png"
-                          , sicSetSource = fmapMaybe id $ updated imgSrc
-                          , sicSetScale  = updated scale
-                          , sicSetOffset = fmapMaybe id $ updated offset
-                          , sicImgStyle  = constDyn "box-shadow: 10px 10px 10px black;"
-                          }
+    si <- scaledImage def
+          { sicInitialSource = "http://cbmm.github.io/images/GitHub.png"
+          , sicSetSource = fmapMaybe id $ updated imgSrc
+          , sicSetScale  = updated scale
+          , sicTopLevelAttributes = constDyn ("style" =: "width:200px;")
+          , sicSetOffset = fmapMaybe id $ updated offset
+          , sicImgStyle  = constDyn "box-shadow: 10px 10px 10px black;"
+          }
     -- let clks :: Event t (Int,Int) = domEvent Mousedown (siEl si)
     --     clkInfo = attachWith ($) (current $ siNaturalCoords si) clks
     el "br" (return ())
