@@ -1,3 +1,27 @@
+{-|
+Module: ScaledImage
+Description: Scalable, positionable image widget
+Copyright: (c) Greg Hale, 2016
+License: BSD3
+Maintainer: imalsogreg@gmail.com
+Stability: experimental
+Portability: GHCJS
+
+This module provides a reflex-dom widget for scaling and positioning images.
+
+A top-level div defaults to the natural size of a source image. The @topScale@
+config parameter adjusts the size of this container.
+
+@sicSetOffset@, @sicSetScale@, and @sicSetBounding@ allow the image to be
+offset, scaled, and cropped while holding the top-level div's size constant.
+The crop is in dimensions of the natural size of the image
+(cropping an 10x10 pixel image by 5 pixels will always result in a picture cut in half)
+
+@imageSpace*@ properties transform various mouse events to the coordinate
+frame of the original imaage.
+-}
+
+
 {-# language CPP #-}
 {-# language RecursiveDo #-}
 {-# language KindSignatures #-}
@@ -92,6 +116,8 @@ data ScaledImage t = ScaledImage
   , imageSpaceMousemove :: Event t (Double, Double)
   , imageSpaceMousedown :: Event t (Double, Double)
   , imageSpaceMouseup   :: Event t (Double, Double)
+  , imageSpaceDblClick  :: Event t (Double, Double)
+  , imageSpaceWheel     :: Event t (Double, (Double,Double))
   }
 
 -- TODO: This kind of pattern seems to come up a lot. I began trying to generalize it here,
@@ -162,9 +188,22 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
   moves  <- relativizeEvent (_el_element img) imgSpace E.mouseMove
   downs  <- relativizeEvent (_el_element img) imgSpace E.mouseDown
   ups    <- relativizeEvent (_el_element img) imgSpace E.mouseUp
+  dbls   <- relativizeEvent (_el_element img) imgSpace E.dblClick
+  -- TODO try to fit this and relativizeEvent into one function
+  wheels <- do
+    evs <- wrapDomEvent (_el_element img) (`on` E.wheel) $ do
+      ev   <- event
+      delY <- getDeltaY ev
+      Just br <- getBoundingClientRect (_el_element img)
+      xOff <- fmap (r2 . negate) (getLeft br)
+      yOff <- fmap (r2 . negate) (getTop  br)
+      cX   <- getClientX ev
+      cY   <- getClientY ev
+      return (delY, (fI cX + xOff, fI cY + yOff ))
+    return $ attachWith (\f (w,(x,y)) -> (w, f (x,y))) (current imgSpace) evs
 
   return $ ScaledImage htmlImg parentDiv naturalSize imgSpace
-    clicks moves downs ups
+    clicks moves downs ups dbls wheels
 
   where
     mkTopLevelAttrs (naturalWid, naturalHei) topAttrs topScale =
