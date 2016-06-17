@@ -1,13 +1,29 @@
+{-|
+Module: Thumbnail
+Description: A picture-in-picture style navigation widget for large images
+Copyright: (c) Greg Hale, 2016
+License: BSD3
+Maintainer: imalsogreg@gmail.com
+Stability: experimental
+Portability: GHCJS
+
+This module provides a widget for panning and zooming in a large image by
+interacting with a smaller 'navigation thumbnail'. For now,
+it also allows selecting multiple rectangular regions in the image (this should be factored out somehow)
+-}
+
 {-# language CPP #-}
 {-# language RecursiveDo #-}
 {-# language KindSignatures #-}
 {-# language LambdaCase #-}
 {-# language RankNTypes #-}
 {-# language TypeFamilies #-}
+{-# language TemplateHaskell #-}
 {-# language ScopedTypeVariables #-}
 
 module Thumbnail where
 
+import           Control.Lens
 import           Control.Monad            (liftM2)
 import           Control.Monad.IO.Class   (MonadIO, liftIO)
 import           Data.Bool
@@ -34,8 +50,6 @@ import           GHCJS.DOM.MouseEvent     (getClientX, getClientY)
 import qualified GHCJS.DOM.Types          as T
 import           GHCJS.DOM.WheelEvent     as WheelEvent
 import qualified GHCJS.DOM.Element        as E
-
-
 import           ScaledImage
 
 
@@ -57,6 +71,34 @@ data Thumbnail t = Thumbnail
   , tBigPicture       :: ScaledImage t
   }
 
+data Movement = Movement { movementFocus :: (Double,Double)
+                         , movementDeltaZoom :: Double
+                         }
+              deriving (Eq, Show)
+
+data ModelUpdate =
+    DelSubPic Int
+  | AddSubPic BoundingBox
+  | ModifyBox Int BoundingBox
+  | SelBox Int
+  | DeselectBoxes
+  | DoMovement Movement
+  | SetGeom (Int,Int)
+    deriving (Eq, Show)
+
+data Model t = Model
+  { _mFocus   :: (Double,Double)
+  , _mZoom    :: Double
+  , _mSelect  :: Maybe Int
+  , _mSubPics :: Map Int BoundingBox
+  , _mGeom    :: (Int,Int)
+  } deriving (Eq, Show)
+
+model0 :: Model t
+model0 = Model (1,1) 1 Nothing mempty (1,1)
+
+makeLenses ''Model
+
 
 -- | A complicated widget used for panning, zooming, and region-selecting within an img
 --   Movement is achieved through clicks and mousewheels in a 'picture-in-picture' view
@@ -66,38 +108,32 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
   pb <- getPostBuild
 
   topAttrs <- combineDyn (Map.unionWith (++))
-    (constDyn $ "class" =: "thumbnail-widget"
+    (constDyn $ "class" =: "thumbnail-widget "
              <> "style" =: "position:relative;")
     attrs
 
-  topSize <- holdDyn (1,1) =<<
-    performEvent (ffor (leftmost [pb, resizes, () <$ updated attrs]) $ \() -> do
-                     Just r <- getBoundingClientRect $ _el_element tnWidget
-                     liftM2 (,) (getWidth r) (getHeight r)
-                 )
-  outerScale <- combineDyn (\(natWid,natHei) (wWid,wHei) -> r2 $ case (wWid,wHei) of
+  topResizes <- (fmap . fmap) SetGeom $
+    (performEvent (ffor (leftmost [pb, resize, () <$ updated attrs]) $ \() -> do
+                      Just r <- getBoundingClientRect $ _el_element tnWidget
+                      liftM2 (,) (floor <$> getWidth r) (floor <$> getHeight r)))
+
+  outerScale <- combineDyn (\(natWid,natHei) (wWid,wHei) -> case (wWid,wHei) of
                                (0,0) -> 1
                                _     -> if   wWid == 0
-                                        then wHei / fI natHei
-                                        else wWid / fI natWid)
+                                        then fI wHei / fI natHei
+                                        else fI wWid / fI natWid)
                 (tImageNaturalSize tn) topSize
 
-  -- text "TopSize: "
-  -- display topSize
-  -- el "br" (return ())
-  -- text "OuterScale :"
-  -- display outerScale
-  -- el "br" (return ())
-  -- text "NaturalSize:"
-  -- display $ tImageNaturalSize tn
-  -- el "br" (return ())
+  (resize,(tnWidget, (tn,model))) <- resizeDetectorWithStyle
+   "width:100%;height:100%;" $
+   elDynAttr' "div" topAttrs $ elStopPropagationNS Nothing "div" Wheel $
+   mdo
 
-  (resizes,(tnWidget, tn)) <- resizeDetectorWithStyle "width:100%;height:100%;" $  elDynAttr' "div" topAttrs $ elStopPropagationNS Nothing "div" Wheel $ mdo
+    display model
 
     let thumbPosition = ffor (updated $ siNaturalSize bigPic) $ \(natW, natH) ->
           (0.9 * fI natW :: Double, 0 :: Double)
 
-    --zoomFocus <- foldDyn applyMoves (1,(1,1)) zoomsFocuses -- TODO
     zoom  <- foldDyn ($) 1 (zooms :: Event t (Double -> Double))
     focus <- holdDyn (1 :: Double,1 :: Double) (leftmost [imgLoadPosition, thumbPosUpdates])
 
@@ -108,7 +144,8 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
       Nothing -> "class" =: "big-picture"
       Just i  -> "class" =: "big-picture bp-darkened"
               <> "style" =:
-                 "position:absolute;filter: blur(2px) brightness(90%); -webkit-filter: blur(2px) brightness(90%);"
+                 ("position:absolute;filter: blur(2px) brightness(90%);"
+                  <> " -webkit-filter: blur(2px) brightness(90%);")
 
     bigPic   <- elDynAttr "div" bigPicAttrs $
       scaledImage def
@@ -120,11 +157,11 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
         }
     performEvent $ fmap (liftIO . print) (imageSpaceClick bigPic)
 
-    selAndSubPics <- foldDyn applySubPicCommand (Nothing, mempty) (traceEvent "subpic" $ leftmost [subPicEvents, (0,AddSubPic testBox) <$ pb])
-    sel :: Dynamic t (Maybe Int) <- mapDyn fst selAndSubPics
-    subPics :: Dynamic t (Map Int BoundingBox) <- mapDyn snd selAndSubPics
 
-    subPicEvents <- selectMayViewListWithKey sel subPics
+    model :: Dynamic t (Model t) <- foldDyn applyModelUpdate model0 (traceEvent "subpic" $ leftmost [fmap snd subPicEvents
+                                                                                                    ,AddSubPic testBox <$ pb
+                                                                                                    ,topResizes])
+    subPicEvents :: Event t (Int, ModelUpdate) <- selectMayViewListWithKey sel subPics
       (subPicture srcImg bigPic zoom focus outerScale)
 
     thumbScale <- mapDyn (/3) outerScale
@@ -137,7 +174,14 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
 
     let thumbPosUpdates = imageSpaceClick thumbPic
 
-    return $ Thumbnail undefined undefined undefined (siNaturalSize  bigPic) bigPic
+    return $ (Thumbnail undefined undefined undefined (siNaturalSize  bigPic) bigPic, model)
+
+  sel :: Dynamic t (Maybe Int) <- mapDyn _mSelect model
+  -- subPics :: Dynamic t (Map Int (BoundingBox, Event t Movement)) <- mapDyn _mSubPics selAndSubPics
+  subPics :: Dynamic t (Map Int BoundingBox) <- mapDyn _mSubPics model
+  topSize :: Dynamic t (Int,Int) <- mapDyn _mGeom model
+
+
 
   cWheeled <- wrapDomEvent (_el_element . siEl . tBigPicture $ tn) (`on` E.wheel) $ do
         ev <- event
@@ -149,16 +193,9 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
         pY <- getClientY ev
         -- return (y,(pX,pY))
         return y
-  let -- applyMoves :: (Double, (Double,Double)) -> (Double,(Double,Double)) -> (Double, (Double,Double))
   let zooms = fmap (\n z -> z * (1 + n/200)) (traceEvent "wheel" cWheeled)
   return tn
 
-data SubPicCommand = DelSubPic Int
-                   | AddSubPic BoundingBox
-                   | ModifyBox Int BoundingBox
-                   | SelBox Int
-                   | DeselectBoxes
-                   deriving (Eq, Show)
 
 uncenteredOffsets :: Reflex t => ScaledImage t -> Event t (Double, Double) -> Event t (Double, Double)
 uncenteredOffsets bigPic thumbPosUpdates =
@@ -166,21 +203,22 @@ uncenteredOffsets bigPic thumbPosUpdates =
   (fI w/2 - x, fI h/2 - y)
 
 
+
 subPicture :: MonadWidget t m
            => String -- ^ image src
            -> ScaledImage t
            -> Dynamic t Double -- ^ zoom
            -> Dynamic t (Double,Double) -- ^ focus point
-           -> Dynamic t Double
+           -> Dynamic t Double -- ^ Top level (whole-widget) extra scaling
            -> Int -- ^ Key
            -> Dynamic t BoundingBox -- ^ Result rect
            -> Dynamic t Bool -- ^ Selected?
-           -> m (Event t SubPicCommand)
+           -> m (Event t ModelUpdate)
 subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
   pb <- getPostBuild
 
   subPicAttrs <- mkSubPicAttrs `mapDyn` isSel
-  (e,(img,dels)) <- elDynAttr' "div" subPicAttrs $ do
+  (e,(img,dels,dones)) <- elDynAttr' "div" subPicAttrs $ do
 
     img <- scaledImage def
            { sicInitialSource   = srcImg
@@ -189,11 +227,15 @@ subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
            , sicSetOffset       = uncenteredOffsets bigPic $ leftmost [updated focus, tag (current focus) pb]
            , sicSetBounding     = fmap Just . leftmost $ [tag (current rect) pb, updated rect]
            }
-    dels <- fmap (DelSubPic k <$) (elAttr "div" ("style" =: "pointer-events:auto;") $ button "x")
-    return (img,dels)
+    dels  <- fmap (DelSubPic k <$)
+           (elAttr "div" ("style" =: "pointer-events:auto;") $ button "x")
+    dones <- fmap (DeselectBoxes <$) (elAttr "div" ("style" =: "pointer-events:auto;") $ button "o")
+    return (img,dels, dones)
 
-  return $ leftmost [ dels
-                    , SelBox k <$ domEvent Click e
+  return $ leftmost [SelBox k <$ gate (not <$> current isSel)
+                                      (domEvent Click (siEl img))
+                    , traceEvent "Del" dels
+                    , traceEvent "DoneClick" dones
                     ]
 
   where mkSubPicAttrs b = "class" =: "sub-picture-top"
@@ -202,17 +244,20 @@ subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
           where unselstyle = "border: 1px solid black;"
                 selstyle   = "border: 1px solid black; box-shadow: 0px 0px 10px white;"
 
-applySubPicCommand :: (Int, SubPicCommand)
-                   -> (Maybe Int, Map Int BoundingBox)
-                   -> (Maybe Int, Map Int BoundingBox)
-applySubPicCommand (_, DelSubPic k  ) (_,m) = (Nothing, Map.delete k m)
-applySubPicCommand (_, AddSubPic b  ) (_,m) =
-  let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey m)
-  in (Just k, Map.insert k b m)
-applySubPicCommand (_, ModifyBox k b) (_,m) = (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
-applySubPicCommand (_, SelBox k     ) (_,m) = (Just k, m)
-applySubPicCommand (_, DeselectBoxes) (_,m) = (Nothing,m)
--- applySubPicCommand (_, SubZoom f dz,  foc, zm) (_,m) = undefined
+
+-------------------------------------------------------------------------------
+applyModelUpdate :: ModelUpdate -> Model t -> Model t
+applyModelUpdate (DelSubPic k  ) m = m & over mSubPics (Map.delete k)
+                                         & set  mSelect  Nothing
+applyModelUpdate (AddSubPic b  ) m =
+  let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey $ _mSubPics m)
+  in m & over mSubPics (Map.insert k b) -- (Just k, Map.insert k b m)
+       & set  mSelect (Just k)
+applyModelUpdate (ModifyBox k b) m = undefined -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
+applyModelUpdate (SelBox k     ) m = m & set mSelect (Just k)
+applyModelUpdate (DeselectBoxes) m = m & set mSelect Nothing
+applyModelUpdate (DoMovement mv) m = undefined
+applyModelUpdate (SetGeom g)     m = m & set mGeom g
 
 
 
