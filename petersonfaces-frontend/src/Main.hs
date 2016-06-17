@@ -25,15 +25,17 @@ import Thumbnail
 main :: IO ()
 main = mainWidget run'
 
-testimg  = "file:///Users/greghale/Programming/caffe/examples/images/fish-bike.jpg"
-testimg' = "file:///home/greghale/Documents/bicycle.jpg"
+testimg   = "https://upload.wikimedia.org/wikipedia/commons/5/55/Atelopus_zeteki1.jpg"
+testimg'  = "file:///Users/greghale/Programming/caffe/examples/images/fish-bike.jpg"
+testimg'' = "file:///home/greghale/Documents/bicycle.jpg"
+
 
 run' :: MonadWidget t m => m ()
 run' = do
-  wid :: Dynamic t (Maybe Double) <- readInput "Width" 400
+  wid :: Dynamic t (Maybe Double) <- readInput "Width" 800
   attrs <- forDyn wid $ \w -> "style" =: ("width:" <> show (fromMaybe 100 w) <> "px;")
   content <- fmap fst $ elDynAttr' "div" attrs $ do
-    tn <- thumbnail def { tcSourceImage = testimg'
+    tn <- thumbnail def { tcSourceImage = testimg
                         , tcAttributes   = attrs}
     return ()
   return ()

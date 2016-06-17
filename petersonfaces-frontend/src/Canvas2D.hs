@@ -1,3 +1,17 @@
+{-|
+Module: Canvas2D
+Description: reflex-dom interface to an html5 canvas
+Copyright: (c) Greg Hale, 2016
+License: BSD3
+Maintainer: imalsogreg@gmail.com
+Stability: experimental
+Portability: GHCJS
+
+This module exposes an HTML5 canvas through a reflex-dom interface.
+Note: It's completely untested and unused.
+
+-}
+
 {-# language CPP #-}
 {-# language RecursiveDo #-}
 {-# language KindSignatures #-}
@@ -21,29 +35,6 @@ import GHCJS.DOM.Types (IsGObject, HTMLCanvasElement)
 import GHCJS.DOM.CanvasRenderingContext2D
 import GHCJS.DOM.ImageData
 
-#ifndef ghcjs_HOST_OS
-fromJSValUnchecked = error ""
-toJSVal = error ""
-
-data CanvasRenderingContext2D
-data ImageData
-
-getContext :: MonadIO m => HTMLCanvasElement -> String -> m CanvasRenderingContext2D
-getContext = error "getContext only available in ghcjs"
-
-getImageData :: CanvasRenderingContext2D -> Float -> Float -> Float -> Float -> IO (Maybe ImageData)
-getImageData = error "getImageData only available in ghcjs"
-
-castToHTMLCanvasElement :: IsGObject obj => obj -> HTMLCanvasElement
-castToHTMLCanvasElement = error "castToHTMLCanvasElement only available in ghcjs"
-
-save :: MonadIO m => CanvasRenderingContext2D -> m ()
-save = error "save only available in ghcjs"
-
-restore :: MonadIO m => CanvasRenderingContext2D -> m ()
-restore = error "restore only available in ghcjs"
-
-#endif
 
 data CanvasConfig t = CanvasConfig
   { canvasConfig_attributes         :: Dynamic t (Map String String)
@@ -82,3 +73,28 @@ canvas (CanvasConfig attrs localCtx ctx0 touchCtx) = do
         -- return $ nullableToMaybe i
 
   return $ Canvas canvasEl ctx getCtx
+
+
+#ifndef ghcjs_HOST_OS
+fromJSValUnchecked = error ""
+toJSVal = error ""
+
+data CanvasRenderingContext2D
+data ImageData
+
+getContext :: MonadIO m => HTMLCanvasElement -> String -> m CanvasRenderingContext2D
+getContext = error "getContext only available in ghcjs"
+
+getImageData :: CanvasRenderingContext2D -> Float -> Float -> Float -> Float -> IO (Maybe ImageData)
+getImageData = error "getImageData only available in ghcjs"
+
+castToHTMLCanvasElement :: IsGObject obj => obj -> HTMLCanvasElement
+castToHTMLCanvasElement = error "castToHTMLCanvasElement only available in ghcjs"
+
+save :: MonadIO m => CanvasRenderingContext2D -> m ()
+save = error "save only available in ghcjs"
+
+restore :: MonadIO m => CanvasRenderingContext2D -> m ()
+restore = error "restore only available in ghcjs"
+
+#endif

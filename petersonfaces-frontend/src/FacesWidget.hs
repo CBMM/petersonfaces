@@ -1,3 +1,15 @@
+{-|
+Module: FacesWidget
+Description: Specialization of the thumbnail widget for Peterson's face-selection task
+Copyright: (c) Greg Hale, 2016
+License: BSD3
+Maintainer: imalsogreg@gmail.com
+Stability: experimental
+Portability: GHCJS
+
+-}
+
+
 {-# language ScopedTypeVariables #-}
 {-# language RankNTypes #-}
 {-# language DeriveGeneric #-}
