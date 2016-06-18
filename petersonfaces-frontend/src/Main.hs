@@ -25,9 +25,7 @@ import Thumbnail
 main :: IO ()
 main = mainWidget run'
 
-testimg   = "https://upload.wikimedia.org/wikipedia/commons/5/55/Atelopus_zeteki1.jpg"
-testimg'  = "file:///Users/greghale/Programming/caffe/examples/images/fish-bike.jpg"
-testimg'' = "file:///home/greghale/Documents/bicycle.jpg"
+testimg = "http://s.hswstatic.com/gif/frog-1.jpg"
 
 
 run' :: MonadWidget t m => m ()

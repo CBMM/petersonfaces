@@ -23,6 +23,7 @@ it also allows selecting multiple rectangular regions in the image (this should 
 
 module Thumbnail where
 
+import           Control.Arrow
 import           Control.Lens
 import           Control.Monad            (liftM2)
 import           Control.Monad.IO.Class   (MonadIO, liftIO)
@@ -32,6 +33,7 @@ import           Data.Map                 (Map)
 import qualified Data.Map                 as Map
 import           Data.Monoid              ((<>))
 import           Reflex.Dom               hiding (restore)
+import           GHCJS.DOM.EventM         (EventM)
 #ifdef ghcjs_HOST_OS
 import GHCJS.DOM.HTMLCanvasElement        (getContext, castToHTMLCanvasElement)
 import GHCJS.DOM.CanvasRenderingContext2D (CanvasRenderingContext2D, save, restore, getImageData)
@@ -71,10 +73,6 @@ data Thumbnail t = Thumbnail
   , tBigPicture       :: ScaledImage t
   }
 
-data Movement = Movement { movementFocus :: (Double,Double)
-                         , movementDeltaZoom :: Double
-                         }
-              deriving (Eq, Show)
 
 data ModelUpdate =
     DelSubPic Int
@@ -82,7 +80,9 @@ data ModelUpdate =
   | ModifyBox Int BoundingBox
   | SelBox Int
   | DeselectBoxes
-  | DoMovement Movement
+  | SetZoom Double
+  | SetFocus (Double, Double)
+  | ZoomAbout Double (Double, Double)
   | SetGeom (Int,Int)
     deriving (Eq, Show)
 
@@ -124,28 +124,31 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
                                         else fI wWid / fI natWid)
                 (tImageNaturalSize tn) topSize
 
+  text "TEST"
+  display model
   (resize,(tnWidget, (tn,model))) <- resizeDetectorWithStyle
    "width:100%;height:100%;" $
    elDynAttr' "div" topAttrs $ elStopPropagationNS Nothing "div" Wheel $
    mdo
 
-    display model
 
     let thumbPosition = ffor (updated $ siNaturalSize bigPic) $ \(natW, natH) ->
           (0.9 * fI natW :: Double, 0 :: Double)
 
-    zoom  <- foldDyn ($) 1 (zooms :: Event t (Double -> Double))
-    focus <- holdDyn (1 :: Double,1 :: Double) (leftmost [imgLoadPosition, thumbPosUpdates])
+    --zoom  <- foldDyn ($) 1 (zooms :: Event t (Double -> Double))
+    zoom  <- mapDyn _mZoom model
+    --focus <- holdDyn (1 :: Double,1 :: Double) (leftmost [imgLoadPosition, thumbPosUpdates])
+    focus <- mapDyn _mFocus model
 
-    let imgLoadPosition = fmap (\(natW,natH) -> (fI natW / 2, fI natH / 2))
-          (tag (current $ siNaturalSize bigPic) (domEvent Load (siEl bigPic)))
+    -- let imgLoadPosition = fmap (\(natW,natH) -> (fI natW / 2, fI natH / 2))
+    --       (tag (current $ siNaturalSize bigPic) (domEvent Load (siEl bigPic)))
 
     bigPicAttrs <- forDyn sel $ \case
-      Nothing -> "class" =: "big-picture"
+      Nothing -> "class" =: "big-picture" <> "style" =: "position:absolute"
       Just i  -> "class" =: "big-picture bp-darkened"
               <> "style" =:
                  ("position:absolute;filter: blur(2px) brightness(90%);"
-                  <> " -webkit-filter: blur(2px) brightness(90%);")
+                  <> " -webkit-filter: blur(2px) brightness(90%); opacity:0.5;")
 
     bigPic   <- elDynAttr "div" bigPicAttrs $
       scaledImage def
@@ -156,11 +159,28 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
         , sicSetScale           = updated zoom
         }
     performEvent $ fmap (liftIO . print) (imageSpaceClick bigPic)
+    zoomPos <- forDyn model $ \m -> (_mZoom m, _mFocus m)
 
+    let okToAddSelection = fmap (== Nothing) (current sel)
+        newSelectionPos (z,(wid,hei)) (x,y) =
+            let (boxWid,boxHei) = (fI wid / z / 4, fI hei / z / 4)
+                topLeft  = Coord (max 0 $ x - boxWid/2)            (max 0 $ y - boxHei/2)
+                botRight = Coord (min (fI wid - 1) $ x + boxWid/2) (min (fI hei - 1) $ y + boxHei/2)
+            in  AddSubPic (BoundingBox topLeft botRight)
+        addSel = gate okToAddSelection $
+                 attachWith newSelectionPos
+                            ((,) <$> current zoom <*> current (siNaturalSize bigPic))
+                            (imageSpaceDblClick bigPic)
 
-    model :: Dynamic t (Model t) <- foldDyn applyModelUpdate model0 (traceEvent "subpic" $ leftmost [fmap snd subPicEvents
-                                                                                                    ,AddSubPic testBox <$ pb
-                                                                                                    ,topResizes])
+    model :: Dynamic t (Model t) <- foldDyn applyModelUpdate model0
+        (traceEvent "subpic" $ leftmost [fmap snd subPicEvents
+                                        ,AddSubPic testBox <$ pb
+                                        ,topResizes
+                                        ,addSel
+                                        ,fmap (SetZoom . fst) zooms -- TODO replace this with ZoomAbout
+                                        -- ,fmap imgLoadPosition
+                                        ,fmap SetFocus thumbPosUpdates])
+
     subPicEvents :: Event t (Int, ModelUpdate) <- selectMayViewListWithKey sel subPics
       (subPicture srcImg bigPic zoom focus outerScale)
 
@@ -173,6 +193,7 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
                       }
 
     let thumbPosUpdates = imageSpaceClick thumbPic
+        zooms           = fmap (first $ (/ 200)) $ imageSpaceWheel bigPic
 
     return $ (Thumbnail undefined undefined undefined (siNaturalSize  bigPic) bigPic, model)
 
@@ -182,18 +203,17 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
   topSize :: Dynamic t (Int,Int) <- mapDyn _mGeom model
 
 
-
-  cWheeled <- wrapDomEvent (_el_element . siEl . tBigPicture $ tn) (`on` E.wheel) $ do
-        ev <- event
-        y <- getDeltaY ev
-        liftIO $ print y
-        preventDefault
-        stopPropagation
-        pX <- getClientX ev
-        pY <- getClientY ev
-        -- return (y,(pX,pY))
-        return y
-  let zooms = fmap (\n z -> z * (1 + n/200)) (traceEvent "wheel" cWheeled)
+  -- cWheeled <- wrapDomEvent (_el_element . siEl . tBigPicture $ tn) (`on` E.wheel) $ do
+  --       ev <- event
+  --       y <- getDeltaY ev
+  --       liftIO $ print y
+  --       preventDefault
+  --       stopPropagation
+  --       pX <- getClientX ev
+  --       pY <- getClientY ev
+  --       -- return (y,(pX,pY))
+  --       return y
+  -- let zooms = fmap (\n z -> z * (1 + n/200)) (traceEvent "wheel" cWheeled)
   return tn
 
 
@@ -253,11 +273,13 @@ applyModelUpdate (AddSubPic b  ) m =
   let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey $ _mSubPics m)
   in m & over mSubPics (Map.insert k b) -- (Just k, Map.insert k b m)
        & set  mSelect (Just k)
-applyModelUpdate (ModifyBox k b) m = undefined -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
+applyModelUpdate (ModifyBox k b) m = error "ModifyBox unimplemented" -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
 applyModelUpdate (SelBox k     ) m = m & set mSelect (Just k)
 applyModelUpdate (DeselectBoxes) m = m & set mSelect Nothing
-applyModelUpdate (DoMovement mv) m = undefined
+applyModelUpdate (SetZoom mv)    m = m & set mZoom (max 1 (_mZoom m * (1 + mv)))
+applyModelUpdate (SetFocus (x,y))m = m & set mFocus (x,y)
 applyModelUpdate (SetGeom g)     m = m & set mGeom g
+applyModelUpdate (ZoomAbout z (x,y)) m = error "ZoomAbout unimplemented"
 
 
 

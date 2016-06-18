@@ -222,15 +222,11 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
                  y :: Int = round $ offY
              in  "width:" ++ show w ++ "px; height: " ++ show h ++
                  "px; left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
-           Just (BoundingBox (Coord cX cY) (Coord bW bH)) ->
-             let w :: Int = round $ bW * scale
-                      -- round $ fI (naturalWid - cropLeft cr - cropRight  cr) * scale
-                 h :: Int = round $ bH * scale
-                      -- round $ fI (naturalHei - cropTop  cr - cropBottom cr) * scale
-                 x :: Int = round $ (bW / 2) * scale + offX
-                      -- round $ fI (cropLeft cr) * scale + offX
-                 y :: Int = round $ (bH / 2) * scale + offY
-                      -- round $ fI (cropTop  cr) * scale + offY
+           Just (BoundingBox (Coord x0 y0) (Coord x1 y1)) ->
+             let w :: Int = round $ (x1 - x0) * scale
+                 h :: Int = round $ (y1 - y0) * scale
+                 x :: Int = round $ x0 * scale + offX
+                 y :: Int = round $ y0 * scale + offY
              in ("width:" ++ show w ++ "px;height:" ++ show h ++ "px;" ++
                       "left:"  ++ show x ++ "px;top:"    ++ show y ++ "px;")
 
@@ -247,12 +243,14 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
              let w :: Int = round $ fI naturalWid * scale
                  h :: Int = round $ fI naturalHei * scale
              in "width:" ++ show w ++ "px; height: " ++ show h ++ "px; position:absolute; left: 0px; top 0px;"
-           Just (BoundingBox (Coord cX cY) (Coord bW bH)) ->
+           Just (BoundingBox (Coord x0 y0) (Coord x1 y1)) ->
              let w :: Int = round $ fromIntegral naturalWid * scale
-                 x :: Int = round $ negate (bW / 2) * scale
+                 -- x :: Int = round $ negate ((x1 - x0) / 2) * scale
+                 x :: Int = round $ negate x0
                       -- round $ negate $ fI (cropLeft cr) * scale
-                 y :: Int = round $ negate (bH / 2) * scale
+                 --y :: Int = round $ negate ((y1 - y0) / 2) * scale
                       -- round $ negate $ fI (cropTop  cr) * scale
+                 y :: Int = round $ negate y0
              in "pointer-events:auto;position:absolute;left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
                 ++ "width:" ++ show w ++ "px;"
       in   "src"   =: src
