@@ -84,6 +84,7 @@ data ModelUpdate =
   | SetFocus (Double, Double)
   | ZoomAbout Double (Double, Double)
   | SetGeom (Int,Int)
+  | SetNatSize (Int,Int)
     deriving (Eq, Show)
 
 data Model t = Model
@@ -92,10 +93,11 @@ data Model t = Model
   , _mSelect  :: Maybe Int
   , _mSubPics :: Map Int BoundingBox
   , _mGeom    :: (Int,Int)
+  , _mNatSize :: (Int,Int)
   } deriving (Eq, Show)
 
 model0 :: Model t
-model0 = Model (1,1) 1 Nothing mempty (1,1)
+model0 = Model (0,0) 1 Nothing mempty (0,0) (0,0)
 
 makeLenses ''Model
 
@@ -112,10 +114,15 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
              <> "style" =: "position:relative;")
     attrs
 
+  firstLoad <- headE $ domEvent Load $ siImgEl $ tBigPicture tn
+
+  natSizes <- mapDyn SetNatSize $ nubDyn (tImageNaturalSize tn)
+
   topResizes <- (fmap . fmap) SetGeom $
-    (performEvent (ffor (leftmost [pb, resize, () <$ updated attrs]) $ \() -> do
+    (performEvent (ffor (leftmost [pb, () <$ updated attrs]) $ \() -> do
                       Just r <- getBoundingClientRect $ _el_element tnWidget
                       liftM2 (,) (floor <$> getWidth r) (floor <$> getHeight r)))
+
 
   outerScale <- combineDyn (\(natWid,natHei) (wWid,wHei) -> case (wWid,wHei) of
                                (0,0) -> 1
@@ -124,7 +131,6 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
                                         else fI wWid / fI natWid)
                 (tImageNaturalSize tn) topSize
 
-  text "TEST"
   display model
   (resize,(tnWidget, (tn,model))) <- resizeDetectorWithStyle
    "width:100%;height:100%;" $
@@ -135,9 +141,7 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
     let thumbPosition = ffor (updated $ siNaturalSize bigPic) $ \(natW, natH) ->
           (0.9 * fI natW :: Double, 0 :: Double)
 
-    --zoom  <- foldDyn ($) 1 (zooms :: Event t (Double -> Double))
     zoom  <- mapDyn _mZoom model
-    --focus <- holdDyn (1 :: Double,1 :: Double) (leftmost [imgLoadPosition, thumbPosUpdates])
     focus <- mapDyn _mFocus model
 
     -- let imgLoadPosition = fmap (\(natW,natH) -> (fI natW / 2, fI natH / 2))
@@ -172,14 +176,18 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
                             ((,) <$> current zoom <*> current (siNaturalSize bigPic))
                             (imageSpaceDblClick bigPic)
 
+    pb' <- delay 0.5 pb
+
     model :: Dynamic t (Model t) <- foldDyn applyModelUpdate model0
-        (traceEvent "subpic" $ leftmost [fmap snd subPicEvents
-                                        ,AddSubPic testBox <$ pb
+        (traceEvent "subpic" $ leftmost [fmap SetFocus thumbPosUpdates
+                                        ,updated natSizes
+                                        ,fmap snd subPicEvents
+                                        ,AddSubPic testBox <$ pb'
                                         ,topResizes
                                         ,addSel
                                         ,fmap (SetZoom . fst) zooms -- TODO replace this with ZoomAbout
                                         -- ,fmap imgLoadPosition
-                                        ,fmap SetFocus thumbPosUpdates])
+                                        ])
 
     subPicEvents :: Event t (Int, ModelUpdate) <- selectMayViewListWithKey sel subPics
       (subPicture srcImg bigPic zoom focus outerScale)
@@ -269,16 +277,25 @@ subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
 applyModelUpdate :: ModelUpdate -> Model t -> Model t
 applyModelUpdate (DelSubPic k  ) m = m & over mSubPics (Map.delete k)
                                          & set  mSelect  Nothing
-applyModelUpdate (AddSubPic b  ) m =
+applyModelUpdate (AddSubPic b  )     m =
   let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey $ _mSubPics m)
   in m & over mSubPics (Map.insert k b) -- (Just k, Map.insert k b m)
        & set  mSelect (Just k)
-applyModelUpdate (ModifyBox k b) m = error "ModifyBox unimplemented" -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
-applyModelUpdate (SelBox k     ) m = m & set mSelect (Just k)
-applyModelUpdate (DeselectBoxes) m = m & set mSelect Nothing
-applyModelUpdate (SetZoom mv)    m = m & set mZoom (max 1 (_mZoom m * (1 + mv)))
-applyModelUpdate (SetFocus (x,y))m = m & set mFocus (x,y)
-applyModelUpdate (SetGeom g)     m = m & set mGeom g
+applyModelUpdate (ModifyBox k b)     m = error "ModifyBox unimplemented" -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
+applyModelUpdate (SelBox k     )     m = m & set mSelect (Just k)
+applyModelUpdate (DeselectBoxes)     m = m & set mSelect Nothing
+applyModelUpdate (SetZoom mv)        m   = m & set mZoom (max 1 (_mZoom m * (1 + mv)))
+applyModelUpdate (SetFocus (x,y))    m   = m & set mFocus (x,y)
+applyModelUpdate (SetGeom (wid,hei)) m = let aspect = fI (fst $ _mNatSize m) / fI (snd $ _mNatSize m) :: Double
+                                             (wid',hei') = (round (fI hei * aspect), round ((fI wid / aspect)))
+                                             geom'@(w,h) = (max wid wid', max hei hei')
+                                             foc' = (fI w / 2, fI h / 2)
+                                         in  m & set mGeom (max wid wid', max hei hei') & set mFocus foc'
+applyModelUpdate (SetNatSize (w,h))  m = let aspect = fI w / fI h :: Double
+                                             (gW,gH) = _mGeom m
+                                             (gW',gH') = (fI gH * aspect, fI gW / aspect)
+                                             geom' = (round (max (fI gW) gW'), round (max (fI gH) gH'))
+                                         in m & set mNatSize (w,h) & set mFocus (fI w/2,fI h/2) & set mGeom geom'
 applyModelUpdate (ZoomAbout z (x,y)) m = error "ZoomAbout unimplemented"
 
 

@@ -110,6 +110,7 @@ instance Reflex t => Default (ScaledImageConfig t) where
 data ScaledImage t = ScaledImage
   { siImage             :: HTMLImageElement
   , siEl                :: El t
+  , siImgEl             :: El t
   , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
   , imageSpaceClick     :: Event t (Double, Double)
@@ -150,14 +151,6 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
                        <*> (ImageElement.getNaturalHeight htmlImg))
 
   let htmlImg = ImageElement.castToHTMLImageElement (_el_element img)
-
-  -- widgetSize <- holdDyn (1 :: Double, 1 :: Double) =<< performEvent
-  --   (ffor (leftmost [pb, domEvent Load img, resizes]) $ \() -> do
-  --       Just r <- getBoundingClientRect (_el_element parentDiv)
-  --       liftM2 (,) (r2 <$> getWidth r) (r2 <$> getHeight r))
-  -- outerScale <- combineDyn (\(natWid, natHei) (wWid, wHei) ->
-  --                            min (fI natWid / wWid) (fI natHei / wHei))
-  --   naturalSize widgetSize
 
   imgSrc     <- holdDyn img0 dImg
   bounding   <- holdDyn bounding0 dBounding
@@ -202,7 +195,7 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
       return (delY, (fI cX + xOff, fI cY + yOff ))
     return $ attachWith (\f (w,(x,y)) -> (w, f (x,y))) (current imgSpace) evs
 
-  return $ ScaledImage htmlImg parentDiv naturalSize imgSpace
+  return $ ScaledImage htmlImg parentDiv img naturalSize imgSpace
     clicks moves downs ups dbls wheels
 
   where
@@ -245,14 +238,11 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
              in "width:" ++ show w ++ "px; height: " ++ show h ++ "px; position:absolute; left: 0px; top 0px;"
            Just (BoundingBox (Coord x0 y0) (Coord x1 y1)) ->
              let w :: Int = round $ fromIntegral naturalWid * scale
-                 -- x :: Int = round $ negate ((x1 - x0) / 2) * scale
-                 x :: Int = round $ negate x0
-                      -- round $ negate $ fI (cropLeft cr) * scale
-                 --y :: Int = round $ negate ((y1 - y0) / 2) * scale
-                      -- round $ negate $ fI (cropTop  cr) * scale
-                 y :: Int = round $ negate y0
+                 h :: Int = round $ fromIntegral naturalHei * scale
+                 x :: Int = round $ negate x0 * scale
+                 y :: Int = round $ negate y0 * scale
              in "pointer-events:auto;position:absolute;left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
-                ++ "width:" ++ show w ++ "px;"
+                ++ "width:" ++ show w ++ "px;" -- height:" ++ show h ++ ";"
       in   "src"   =: src
         <> "style" =: posPart
 
