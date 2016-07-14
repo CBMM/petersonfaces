@@ -23,7 +23,7 @@ import ScaledImage
 import Thumbnail
 
 main :: IO ()
-main = mainWidget run'
+main = mainWidget run
 
 testimg = "http://s.hswstatic.com/gif/frog-1.jpg"
 
@@ -66,11 +66,13 @@ run = mdo
                                                           ,imageSpaceMousedown si, imageSpaceMouseup si])
     return ()
 
-  cWheeled <- wrapDomEvent (_el_element content) (`on` E.wheel) (mousewheelHandler)
+  cWheeled :: Event t Double <- wrapDomEvent (_el_element content) (`on` E.wheel) (mousewheelHandler)
   let wheelScale = ffor cWheeled $ \n -> bool (* 0.9) (* 1.1) (n > 0)
 
   sInfo <- dynText =<< holdDyn "Awaiting scroll" (fmap show $ cWheeled)
   return ()
+
+
 
 mousewheelHandler :: EventM e WheelEvent Double
 mousewheelHandler = do

@@ -113,6 +113,7 @@ data ScaledImage t = ScaledImage
   , siImgEl             :: El t
   , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
+  -- , imageToWidgetSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
   , imageSpaceClick     :: Event t (Double, Double)
   , imageSpaceMousemove :: Event t (Double, Double)
   , imageSpaceMousedown :: Event t (Double, Double)
@@ -139,14 +140,15 @@ data ScaledImage t = ScaledImage
 --     - a parent div fixed to the size of the source image,
 --     - a cropping div
 --     - the source image
+
 scaledImage :: MonadWidget t m => ScaledImageConfig t -> m (ScaledImage t)
 scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle trans0 dTrans
              scale0 dScale bounding0 dBounding) = mdo
   pb <- getPostBuild
 
-  postImg <- delay 0 (leftmost [pb, () <$ dImg])
+  firstLoad <- headE $ domEvent Load img
   naturalSize :: Dynamic t (Int,Int) <- holdDyn (1 :: Int, 1 :: Int) =<<
-    performEvent (ffor (domEvent Load img) $ \() ->
+    performEvent (ffor firstLoad $ \() ->
                    (,) <$> (ImageElement.getNaturalWidth htmlImg)
                        <*> (ImageElement.getNaturalHeight htmlImg))
 
@@ -160,8 +162,7 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
 
   parentAttrs <- mkTopLevelAttrs `mapDyn` naturalSize `apDyn` topAttrs `apDyn` topScale
 
-  (resizes,(parentDiv, (img, imgSpace))) <- resizeDetector $
-   elDynAttr' "div" parentAttrs $ do
+  (parentDiv, (img, imgSpace)) <- elDynAttr' "div" parentAttrs $ do
 
     croppingAttrs  <- mkCroppingAttrs
       `mapDyn` naturalSize `apDyn` bounding  `apDyn` scale
@@ -195,8 +196,9 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
       return (delY, (fI cX + xOff, fI cY + yOff ))
     return $ attachWith (\f (w,(x,y)) -> (w, f (x,y))) (current imgSpace) evs
 
-  return $ ScaledImage htmlImg parentDiv img naturalSize imgSpace
-    clicks moves downs ups dbls wheels
+  return $ ScaledImage htmlImg parentDiv img naturalSize imgSpace clicks moves downs ups dbls wheels
+  -- return $ ScaledImage undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined -- htmlImg parentDiv img naturalSize imgSpace-- htmlImg parentDiv img naturalSize imgSpace
+--     clicks moves downs ups dbls wheels
 
   where
     mkTopLevelAttrs (naturalWid, naturalHei) topAttrs topScale =
