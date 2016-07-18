@@ -59,17 +59,17 @@ import           ScaledImage
 data ThumbnailConfig t = ThumbnailConfig
   { tcSourceImage :: String
   , tcAttributes  :: Dynamic t (Map String String)
-  , tcZoom        :: Event t BoundingBox
-  , tcBoundings   :: Event t (Int, Maybe BoundingBox)
+  -- , tcZoom        :: Event t BoundingBox
+  -- , tcBoundings   :: Event t (Int, Maybe BoundingBox)
   }
 
 instance Reflex t => Default (ThumbnailConfig t) where
-  def = ThumbnailConfig "" (constDyn mempty) never never
+  def = ThumbnailConfig "" (constDyn mempty)
 
-data Thumbnail t = Thumbnail
+data Thumbnail t a = Thumbnail
   { tElement          :: El t
-  , tBoxes            :: Dynamic t (Map Int BoundingBox)
-  , tSelection        :: Dynamic t (Maybe (Int, BoundingBox))
+  , tBoxes            :: Dynamic t (Map Int a)
+  , tSelection        :: Dynamic t (Maybe (Int, a))
   , tImageNaturalSize :: Dynamic t (Int,Int)
   , tBigPicture       :: ScaledImage t
   }
@@ -77,8 +77,8 @@ data Thumbnail t = Thumbnail
 
 data ModelUpdate =
     DelSubPic Int
-  | AddSubPic BoundingBox
-  | ModifyBox Int BoundingBox
+  | AddSubPic
+  | ModifyBox Int
   | SelBox Int
   | DeselectBoxes
   | SetZoom Double
@@ -89,26 +89,31 @@ data ModelUpdate =
   deriving (Eq, Show)
 
 
-data Model = Model
+data Model a = Model
   { _mFocus   :: (Double,Double)
   , _mZoom    :: Double
   , _mSelect  :: Maybe Int
-  , _mSubPics :: Map Int BoundingBox
+  -- , _mSubPics :: Map Int a
   , _mGeom    :: (Int,Int)
   , _mNatSize :: (Int,Int)
   } deriving (Eq, Show)
 
-model0 :: Model
-model0 = Model (0,0) 1 Nothing mempty (0,0) (0,0)
+model0 :: Model a
+--model0 = Model (0,0) 1 Nothing mempty (0,0) (0,0)
+model0 = Model (0,0) 1 Nothing (0,0) (0,0)
 
 makeLenses ''Model
 
+type ThumbnailChild t m a = Dynamic t (Double,Double) -> Dynamic t Double -> Int -> () -> Event t () -> m a
 
 -- | A complicated widget used for panning, zooming, and region-selecting within an img
 --   Movement is achieved through clicks and mousewheels in a 'picture-in-picture' view
 --   in the corner of the widget
-thumbnail :: forall t m.MonadWidget t m => ThumbnailConfig t -> m (Thumbnail t)
-thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
+thumbnail :: forall t m a.MonadWidget t m
+          => ThumbnailConfig t
+          -> (ThumbnailChild t m a)
+          -> m (Thumbnail t a)
+thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
   pb <- getPostBuild
 
   topAttrs <- combineDyn (Map.unionWith (++))
@@ -175,28 +180,28 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
             let (boxWid,boxHei) = (fI wid / z / 4, fI hei / z / 4)
                 topLeft  = Coord (max 0 $ x - boxWid/2)            (max 0 $ y - boxHei/2)
                 botRight = Coord (min (fI wid - 1) $ x + boxWid/2) (min (fI hei - 1) $ y + boxHei/2)
-            in  AddSubPic (BoundingBox topLeft botRight)
+            in  AddSubPic -- (BoundingBox topLeft botRight)
         addSel = gate okToAddSelection $
                  attachWith newSelectionPos
                             ((,) <$> current zoom <*> current (siNaturalSize bigPic))
                             (imageSpaceDblClick bigPic)
 
-    pb' <- delay 0.5 pb
-
-    model :: Dynamic t Model <- foldDyn applyModelUpdate model0
+    model :: Dynamic t (Model a) <- foldDyn applyModelUpdate model0
         (traceEvent "" $ leftmost [fmap SetFocus thumbPosUpdates
                                         ,updated natSizes
-                                        ,fmap snd subPicEvents
-                                        ,AddSubPic testBox <$ pb'
+                                        -- ,fmap snd subPicEvents
+                                        -- ,AddSubPic testBox <$ pb'
                                         ,topResizes
-                                        ,addSel
+                                        -- ,addSel
                                         , zooms
                                         ])
 
-    subPicEvents :: Event t (Int, ModelUpdate) <- selectMayViewListWithKey sel subPics
-      (subPicture srcImg bigPic setOffsets zoom focus outerScale)
+    let newChild = never
+    subPics <- listWithKeyShallowDiff mempty newChild (mkChild focus zoom)
+    -- subPicEvents :: Event t (Int, ModelUpdate a) <- selectMayViewListWithKey sel subPics
+    --   (subPicture srcImg bigPic setOffsets zoom focus outerScale)
 
-    thumbScale <- mapDyn (/3) outerScale
+    thumbScale <- mapDyn (/4) outerScale
     thumbPic :: ScaledImage t <- elAttr "div"
       ("style" =: "position:absolute;opacity:0.5;" <>
        "class" =: "thumbnail-navigator") $
@@ -213,7 +218,7 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
 
   sel :: Dynamic t (Maybe Int) <- mapDyn _mSelect model
 
-  subPics :: Dynamic t (Map Int BoundingBox) <- mapDyn _mSubPics model
+  -- subPics :: Dynamic t (Map Int a) <- mapDyn _mSubPics model
   topSize :: Dynamic t (Int,Int) <- mapDyn _mGeom model
 
   return tn
@@ -224,7 +229,7 @@ uncenteredOffsets bigPic thumbPosUpdates =
   ffor (attach (current $ siNaturalSize bigPic) thumbPosUpdates) $ \((w,h),(x,y)) ->
   (fI w/2 - x, fI h/2 - y)
 
-modelOffset :: Model -> (Double, Double)
+modelOffset :: Model a -> (Double, Double)
 modelOffset m = let (fX,fY) = _mFocus m
                     (nW,nH) = bimap fI fI $ _mNatSize m
                     -- s      = fI (fst (_mGeom m)) / nW
@@ -235,12 +240,12 @@ modelOffset m = let (fX,fY) = _mFocus m
 getOffset :: (Double,Double) -> (Double,Double) -> Double -> (Double,Double)
 getOffset (natW,natH) (focX,focY) zoom = (natW/2/zoom - focX, natH/2/zoom - focY)
 
-imageToWidget :: Model -> (Double,Double) -> (Double,Double)
+imageToWidget :: Model a -> (Double,Double) -> (Double,Double)
 imageToWidget m (x,y) = let (offX,offY) = modelOffset m
                             s           = _mZoom m
                         in  ((x - offX)/s, (y - offY)/s)
 
-widgetToImage :: Model -> (Double,Double) -> (Double,Double)
+widgetToImage :: Model a -> (Double,Double) -> (Double,Double)
 widgetToImage m (x,y) = let (offX,offY) = modelOffset m
                             s           = _mZoom m
                         in (s*x + offX, s*y + offY)
@@ -289,7 +294,7 @@ subPicture srcImg bigPic setOffsets zoom focus topScale k rect isSel = mdo
                 selstyle   = "border: 1px solid black; box-shadow: 0px 0px 10px white;"
 
 
-imageSpaceToWidgetSpace :: Model -> (Double,Double) -> (Double,Double)
+imageSpaceToWidgetSpace :: Model a -> (Double,Double) -> (Double,Double)
 imageSpaceToWidgetSpace m (x,y) =
   let (widNat, heiNat)   = bimap fI fI $ _mNatSize m
       (widGeom,heiGeom)  = bimap fI fI $ _mGeom m
@@ -310,7 +315,7 @@ imageSpaceToWidgetSpace m (x,y) =
   in  (x',y')
 
 
-widgetSpaceToImageSpace :: Model -> (Double,Double) -> (Double,Double)
+widgetSpaceToImageSpace :: Model a -> (Double,Double) -> (Double,Double)
 widgetSpaceToImageSpace m (x',y') =
   let (widNat, heiNat) = bimap fI fI $ _mNatSize m
       (widGeom, heiGeom) = bimap fI fI $ _mGeom m
@@ -322,14 +327,14 @@ widgetSpaceToImageSpace m (x',y') =
        (y'+yOff)*heiNat/heiGeom/zm)
 
 -------------------------------------------------------------------------------
-applyModelUpdate :: ModelUpdate -> Model -> Model
-applyModelUpdate (DelSubPic k  ) m = m & over mSubPics (Map.delete k)
-                                         & set  mSelect  Nothing
-applyModelUpdate (AddSubPic b  )     m =
-  let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey $ _mSubPics m)
-  in m & over mSubPics (Map.insert k b) -- (Just k, Map.insert k b m)
-       & set  mSelect (Just k)
-applyModelUpdate (ModifyBox k b)     m = error "ModifyBox unimplemented" -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
+applyModelUpdate :: ModelUpdate -> Model a -> Model a
+applyModelUpdate (DelSubPic k  ) m = m -- & over mSubPics (Map.delete k)
+                                       & set  mSelect  Nothing
+applyModelUpdate (AddSubPic  )     m = error "Used AddSubPic"
+  -- let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey $ _mSubPics m)
+  -- in m -- & over mSubPics (Map.insert k b)
+  --      & set  mSelect (Just k)
+applyModelUpdate (ModifyBox k)     m = error "ModifyBox unimplemented" -- (Just k, Map.insert k b m) -- TODO: Ok? insert, not update?
 applyModelUpdate (SelBox k     )     m = m & set mSelect (Just k)
 applyModelUpdate (DeselectBoxes)     m = m & set mSelect Nothing
 applyModelUpdate (SetZoom mv)        m   = m & set mZoom (max 1 (_mZoom m * (1 + mv)))
@@ -345,36 +350,16 @@ applyModelUpdate (SetNatSize (w,h))  m = let aspect = fI w / fI h :: Double
                                              geom' = (round (max (fI gW) gW'), round (max (fI gH) gH'))
                                          in m & set mNatSize (w,h) & set mFocus (fI w/2,fI h/2) & set mGeom geom'
 applyModelUpdate (ZoomAbout dz (x,y)) m =
-  let (natW, natH) = bimap fI fI $ _mNatSize m
-      (picW, picH) = bimap fI fI $ _mGeom    m
-      (focX, focY) = _mFocus m
-      z = _mZoom m
-      cz = 1 + dz
-      z' = z * cz
-      f  = imageToWidget m
-      g  = widgetToImage m
-
-
-      (widgetX,widgetY) = f (x,y)
-      (widgetX0,widgetY0) = (picW/2, picH/2)
-      (wdX,wdY) = (widgetX - widgetX0, widgetY - widgetY0)
-      (wdX',wdY') = (wdX / cz, wdY / cz)
-      (widgetX',widgetY') = g (wdX' + widgetX0, wdY' + widgetY0)
-      -- focus' = (widgetX', widgetY')
+  let (focX, focY) = _mFocus m
+      cz     = 1 + dz
+      z'     = _mZoom m * cz
       focus' = (zoomAbout1D dz focX x, zoomAbout1D dz focY y)
   in  m {_mFocus = focus', _mZoom = z'}
 
---zoomAbout1D :: (Double,Double) -> Double -> Double -> Double -> Double -> Double
---zoomAbout1D (window0,window1) zoom0 dZoom focus pivotX =
 zoomAbout1D :: Double -> Double -> Double -> Double
 zoomAbout1D dZoom focus pivotX =
-  let -- viewSize0     = (window1 - window0) / zoom0
-      -- (view0,view1) = (focus - viewSize/2, focus + viewSize/2)
-      cz            = 1 + dZoom
-      pivotDist0    = pivotX - focus
-      pivotDist'    = pivotDist0 / cz
-      focus'        = pivotX - pivotDist'
-  in  focus'
+  let pivotDist'    = (pivotX - focus) / (1 + dZoom)
+  in  pivotX - pivotDist'
 
 
 selectMayViewListWithKey :: forall t m k v a. (MonadWidget t m, Ord k)
@@ -394,10 +379,6 @@ selectMayViewListWithKey sel vals mkChild = do
 fromJSValUnchecked = error ""
 toJSVal = error ""
 
--- data CanvasRenderingContext2D
--- data ImageData
--- data ClientRect = ClientRect
---   deriving Show
 
 getContext :: MonadIO m => HTMLCanvasElement -> String -> m CanvasRenderingContext2D
 getContext = error "getContext only available in ghcjs"
@@ -413,9 +394,6 @@ save = error "save only available in ghcjs"
 
 restore :: MonadIO m => CanvasRenderingContext2D -> m ()
 restore = error "restore only available in ghcjs"
-
--- getBoundingClientRect :: MonadIO m => a -> m (Maybe ClientRect)
--- getBoundingClientRect = error "getBoundingClientRect only available in ghcjs"
 
 getTop :: MonadIO m => ClientRect -> m Float
 getTop = error "getTop only available in ghcjs"
@@ -439,18 +417,18 @@ testBox = BoundingBox (Coord 100 100) (Coord 200 200)
 --   ]
 
 
-testModel :: Model
+testModel :: Model BoundingBox
 testModel = Model { _mFocus = (200.0,174.5)
                   , _mZoom = 1.0
                   , _mSelect = Just 0
-                  , _mSubPics = Map.fromList [(0,BoundingBox
-                                               {bbTopLeft =
-                                                Coord { coordX = 100.0
-                                                      , coordY = 100.0}
-                                               ,bbBotRight =
-                                                Coord {coordX = 200.0
-                                                      , coordY = 200.0}})
-                                             ]
+                  -- , _mSubPics = Map.fromList [(0,BoundingBox
+                  --                              {bbTopLeft =
+                  --                               Coord { coordX = 100.0
+                  --                                     , coordY = 100.0}
+                  --                              ,bbBotRight =
+                  --                               Coord {coordX = 200.0
+                  --                                     , coordY = 200.0}})
+                  --                            ]
                   , _mGeom = (800,698)
                   , _mNatSize = (400,349)
                   }

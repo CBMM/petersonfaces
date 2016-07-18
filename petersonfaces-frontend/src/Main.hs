@@ -34,8 +34,8 @@ run' = do
   wid :: Dynamic t (Maybe Double) <- readInput "Width" (Just 800)
   attrs <- forDyn wid $ \w -> "style" =: ("width:" <> show (fromMaybe 100 w) <> "px;")
   content <- fmap fst $ elDynAttr' "div" attrs $ do
-    tn <- thumbnail def { tcSourceImage = testimg
-                        , tcAttributes   = attrs}
+    tn <- thumbnail (ThumbnailConfig { tcSourceImage = testimg
+                                     , tcAttributes   = attrs}) undefined
     return ()
   return ()
 
