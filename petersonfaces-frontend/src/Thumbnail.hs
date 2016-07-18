@@ -23,6 +23,7 @@ it also allows selecting multiple rectangular regions in the image (this should 
 
 module Thumbnail where
 
+import           Control.Applicative
 import           Control.Arrow
 import           Control.Lens
 import           Control.Monad            (liftM2)
@@ -85,7 +86,8 @@ data ModelUpdate =
   | ZoomAbout Double (Double, Double)
   | SetGeom (Int,Int)
   | SetNatSize (Int,Int)
-    deriving (Eq, Show)
+  deriving (Eq, Show)
+
 
 data Model = Model
   { _mFocus   :: (Double,Double)
@@ -155,12 +157,13 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
                  ("position:absolute;filter: blur(2px) brightness(90%);"
                   <> " -webkit-filter: blur(2px) brightness(90%); opacity:0.5;")
 
+    let setOffsets = fmap modelOffset (updated model)
     bigPic   <- elDynAttr "div" bigPicAttrs $
       scaledImage def
         { sicInitialSource      = srcImg
         , sicCroppingAttributes = bigPicAttrs
         , sicTopLevelScale      = outerScale
-        , sicSetOffset          = uncenteredOffsets bigPic thumbPosUpdates
+        , sicSetOffset          = setOffsets -- uncenteredOffsets bigPic thumbPosUpdates
         , sicSetScale           = updated zoom
         }
     performEvent $ fmap (liftIO . print) (imageSpaceClick bigPic)
@@ -181,34 +184,35 @@ thumbnail (ThumbnailConfig srcImg attrs dZoom dBB) = mdo
     pb' <- delay 0.5 pb
 
     model :: Dynamic t Model <- foldDyn applyModelUpdate model0
-        (traceEvent "subpic" $ leftmost [fmap SetFocus thumbPosUpdates
+        (traceEvent "" $ leftmost [fmap SetFocus thumbPosUpdates
                                         ,updated natSizes
                                         ,fmap snd subPicEvents
                                         ,AddSubPic testBox <$ pb'
                                         ,topResizes
                                         ,addSel
-                                        -- ,fmap (SetZoom . fst) zooms -- TODO replace this with ZoomAbout
-                                        ,fmap (uncurry ZoomAbout) zooms
-                                        -- ,fmap imgLoadPosition
+                                        , zooms
                                         ])
 
     subPicEvents :: Event t (Int, ModelUpdate) <- selectMayViewListWithKey sel subPics
-      (subPicture srcImg bigPic zoom focus outerScale)
+      (subPicture srcImg bigPic setOffsets zoom focus outerScale)
 
     thumbScale <- mapDyn (/3) outerScale
     thumbPic :: ScaledImage t <- elAttr "div"
-      ("style" =: "position:absolute;opacity:0.5;" <> "class" =: "thumbnail-navigator") $
+      ("style" =: "position:absolute;opacity:0.5;" <>
+       "class" =: "thumbnail-navigator") $
       scaledImage def { sicInitialSource = srcImg
                       , sicInitialScale  = 1
                       , sicTopLevelScale = thumbScale
                       }
 
     let thumbPosUpdates = imageSpaceClick thumbPic
-        zooms           = fmap (first (/ 200)) $ imageSpaceWheel bigPic
+        zooms           = fmap (\(dz,pnt) -> ZoomAbout (dz/200) pnt)
+          (imageSpaceWheel bigPic)
 
     return $ (Thumbnail undefined undefined undefined (siNaturalSize  bigPic) bigPic, model)
 
   sel :: Dynamic t (Maybe Int) <- mapDyn _mSelect model
+
   subPics :: Dynamic t (Map Int BoundingBox) <- mapDyn _mSubPics model
   topSize :: Dynamic t (Int,Int) <- mapDyn _mGeom model
 
@@ -220,11 +224,31 @@ uncenteredOffsets bigPic thumbPosUpdates =
   ffor (attach (current $ siNaturalSize bigPic) thumbPosUpdates) $ \((w,h),(x,y)) ->
   (fI w/2 - x, fI h/2 - y)
 
+modelOffset :: Model -> (Double, Double)
+modelOffset m = let (fX,fY) = _mFocus m
+                    (nW,nH) = bimap fI fI $ _mNatSize m
+                    -- s      = fI (fst (_mGeom m)) / nW
+                    -- s = 1
+                    s       = 1 / _mZoom m
+                in  ((nW/2)*s - fX, (nH/2)*s - fY)
 
+getOffset :: (Double,Double) -> (Double,Double) -> Double -> (Double,Double)
+getOffset (natW,natH) (focX,focY) zoom = (natW/2/zoom - focX, natH/2/zoom - focY)
+
+imageToWidget :: Model -> (Double,Double) -> (Double,Double)
+imageToWidget m (x,y) = let (offX,offY) = modelOffset m
+                            s           = _mZoom m
+                        in  ((x - offX)/s, (y - offY)/s)
+
+widgetToImage :: Model -> (Double,Double) -> (Double,Double)
+widgetToImage m (x,y) = let (offX,offY) = modelOffset m
+                            s           = _mZoom m
+                        in (s*x + offX, s*y + offY)
 
 subPicture :: MonadWidget t m
            => String -- ^ image src
            -> ScaledImage t
+           -> Event t (Double,Double)
            -> Dynamic t Double -- ^ zoom
            -> Dynamic t (Double,Double) -- ^ focus point
            -> Dynamic t Double -- ^ Top level (whole-widget) extra scaling
@@ -232,7 +256,7 @@ subPicture :: MonadWidget t m
            -> Dynamic t BoundingBox -- ^ Result rect
            -> Dynamic t Bool -- ^ Selected?
            -> m (Event t ModelUpdate)
-subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
+subPicture srcImg bigPic setOffsets zoom focus topScale k rect isSel = mdo
   pb <- getPostBuild
 
   subPicAttrs <- mkSubPicAttrs `mapDyn` isSel
@@ -242,7 +266,7 @@ subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
            { sicInitialSource   = srcImg
            , sicTopLevelScale   = topScale
            , sicSetScale        = updated zoom
-           , sicSetOffset       = uncenteredOffsets bigPic $ leftmost [updated focus, tag (current focus) pb]
+           , sicSetOffset       = setOffsets -- uncenteredOffsets bigPic $ leftmost [updated focus, tag (current focus) pb]
            , sicSetBounding     = fmap Just . leftmost $ [tag (current rect) pb, updated rect]
            }
     dels  <- fmap (DelSubPic k <$)
@@ -254,9 +278,8 @@ subPicture srcImg bigPic zoom focus topScale k rect isSel = mdo
 
   return $ leftmost [SelBox k <$ gate (not <$> current isSel)
                                       (domEvent Click (siEl img))
-                    , zooms
-                    , traceEvent "Del" dels
-                    , traceEvent "DoneClick" dones
+                    , dels
+                    , dones
                     ]
 
   where mkSubPicAttrs b = "class" =: "sub-picture-top"
@@ -322,27 +345,36 @@ applyModelUpdate (SetNatSize (w,h))  m = let aspect = fI w / fI h :: Double
                                              geom' = (round (max (fI gW) gW'), round (max (fI gH) gH'))
                                          in m & set mNatSize (w,h) & set mFocus (fI w/2,fI h/2) & set mGeom geom'
 applyModelUpdate (ZoomAbout dz (x,y)) m =
-      let (natW, natH) = bimap fI fI $ _mNatSize m
-          (picW, picH) = bimap fI fI $ _mGeom    m
-          (focX, focY) = _mFocus m
-          z  = _mZoom m
-          cz = 1 + dz                -- zoom coefficient
-          z' = z * cz                -- new zoom
+  let (natW, natH) = bimap fI fI $ _mNatSize m
+      (picW, picH) = bimap fI fI $ _mGeom    m
+      (focX, focY) = _mFocus m
+      z = _mZoom m
+      cz = 1 + dz
+      z' = z * cz
+      f  = imageToWidget m
+      g  = widgetToImage m
 
-          (widgetX,widgetY)   = imageSpaceToWidgetSpace m (x,y)
-          (widgetX0,widgetY0) = (picW / 2, picH / 2)
-          (wdX,wdY) = (widgetX - widgetX0, widgetY - widgetY0)
-          (wdX',wdY') =  (wdX / cz, wdY / cz)
-          (widgetX',widgetY') = widgetSpaceToImageSpace m (wdX' + widgetX0, wdY' + widgetY0)
-          focus' = (widgetX', widgetY')
 
-          -- dx = (x' - focX) * z * pixW * natW  -- pixel dist from focus x to zoomAbout x
-          -- dx' = dx * dz              -- new dist from focus x to zoomAbout x
-          -- dy = (y' - focY) * z * pixH * natH
-          -- dy' = dy * dz
-          -- x   = dx
-          -- focus' = (focX + dx * dz, focY + dy * dz)
-      in  m {_mFocus = focus', _mZoom = _mZoom m * (1 +z )}
+      (widgetX,widgetY) = f (x,y)
+      (widgetX0,widgetY0) = (picW/2, picH/2)
+      (wdX,wdY) = (widgetX - widgetX0, widgetY - widgetY0)
+      (wdX',wdY') = (wdX / cz, wdY / cz)
+      (widgetX',widgetY') = g (wdX' + widgetX0, wdY' + widgetY0)
+      -- focus' = (widgetX', widgetY')
+      focus' = (zoomAbout1D dz focX x, zoomAbout1D dz focY y)
+  in  m {_mFocus = focus', _mZoom = z'}
+
+--zoomAbout1D :: (Double,Double) -> Double -> Double -> Double -> Double -> Double
+--zoomAbout1D (window0,window1) zoom0 dZoom focus pivotX =
+zoomAbout1D :: Double -> Double -> Double -> Double
+zoomAbout1D dZoom focus pivotX =
+  let -- viewSize0     = (window1 - window0) / zoom0
+      -- (view0,view1) = (focus - viewSize/2, focus + viewSize/2)
+      cz            = 1 + dZoom
+      pivotDist0    = pivotX - focus
+      pivotDist'    = pivotDist0 / cz
+      focus'        = pivotX - pivotDist'
+  in  focus'
 
 
 selectMayViewListWithKey :: forall t m k v a. (MonadWidget t m, Ord k)

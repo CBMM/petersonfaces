@@ -79,12 +79,12 @@ import qualified GHCJS.DOM.Element        as E
 data Coord = Coord
   { coordX :: Double
   , coordY :: Double
-  } deriving (Eq, Show, Ord)
+  } deriving (Eq, Show, Ord, Read)
 
 data BoundingBox = BoundingBox
   { bbTopLeft  :: Coord
   , bbBotRight :: Coord
-  } deriving (Eq, Show, Ord)
+  } deriving (Eq, Show, Ord, Read)
 
 
 data ScaledImageConfig t = ScaledImageConfig
@@ -113,7 +113,7 @@ data ScaledImage t = ScaledImage
   , siImgEl             :: El t
   , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
-  -- , imageToWidgetSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
+  , widgetToScreenSpace :: Dynamic t ((Double,Double) -> (Double, Double))
   , imageSpaceClick     :: Event t (Double, Double)
   , imageSpaceMousemove :: Event t (Double, Double)
   , imageSpaceMousedown :: Event t (Double, Double)
@@ -160,31 +160,37 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
   innerScale <- holdDyn scale0 dScale
   scale      <- combineDyn (*) innerScale topScale
 
+  shiftScreenPix <- mkShiftScreenPix `mapDyn` trans `apDyn` bounding `apDyn` scale
+
   parentAttrs <- mkTopLevelAttrs `mapDyn` naturalSize `apDyn` topAttrs `apDyn` topScale
 
-  (parentDiv, (img, imgSpace)) <- elDynAttr' "div" parentAttrs $ do
+  (resizes,(parentDiv, (img, imgSpace, screenSpace))) <- resizeDetector $
+   elDynAttr' "div" parentAttrs $ do
 
     croppingAttrs  <- mkCroppingAttrs
-      `mapDyn` naturalSize `apDyn` bounding  `apDyn` scale
-      `apDyn`  trans       `apDyn` cropAttrs `apDyn` iStyle
+      `mapDyn` naturalSize    `apDyn` bounding  `apDyn` scale
+      `apDyn`  shiftScreenPix `apDyn` cropAttrs `apDyn` iStyle
 
     imgAttrs <- mkImgAttrs
       `mapDyn` imgSrc `apDyn` naturalSize `apDyn` scale
       `apDyn`  trans  `apDyn` bounding
 
+    -- The DOM element for the image itself
     (croppingDiv,img) <- elDynAttr' "div" croppingAttrs $
       fst <$> elDynAttr' "img" imgAttrs (return ())
 
-    imgSpace <- mkImgSpace `mapDyn` scale
-    return (img, imgSpace)
+    imgSpace    <- mkImgSpace `mapDyn` scale `apDyn` shiftScreenPix
+    screenSpace <- mkScreenSpace `mapDyn` scale `apDyn` shiftScreenPix
+    return (img, imgSpace, screenSpace)
 
-  clicks <- relativizeEvent (_el_element img) imgSpace E.click
-  moves  <- relativizeEvent (_el_element img) imgSpace E.mouseMove
-  downs  <- relativizeEvent (_el_element img) imgSpace E.mouseDown
-  ups    <- relativizeEvent (_el_element img) imgSpace E.mouseUp
-  dbls   <- relativizeEvent (_el_element img) imgSpace E.dblClick
+  clicks <- relativizeEvent (_el_element img) imgSpace E.click     shiftScreenPix
+  moves  <- relativizeEvent (_el_element img) imgSpace E.mouseMove shiftScreenPix
+  downs  <- relativizeEvent (_el_element img) imgSpace E.mouseDown shiftScreenPix
+  ups    <- relativizeEvent (_el_element img) imgSpace E.mouseUp   shiftScreenPix
+  dbls   <- relativizeEvent (_el_element img) imgSpace E.dblClick  shiftScreenPix
   -- TODO try to fit this and relativizeEvent into one function
   wheels <- do
+    i <- combineDyn (,) imgSpace shiftScreenPix
     evs <- wrapDomEvent (_el_element img) (`on` E.wheel) $ do
       ev   <- event
       delY <- getDeltaY ev
@@ -194,34 +200,38 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
       cX   <- getClientX ev
       cY   <- getClientY ev
       return (delY, (fI cX + xOff, fI cY + yOff ))
-    return $ attachWith (\f (w,(x,y)) -> (w, f (x,y))) (current imgSpace) evs
+    return $ attachWith (\(f,(dx,dy)) (w,(x,y)) -> (w, f (x + dx,y + dy))) (current i) evs
 
-  return $ ScaledImage htmlImg parentDiv img naturalSize imgSpace clicks moves downs ups dbls wheels
-  -- return $ ScaledImage undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined undefined -- htmlImg parentDiv img naturalSize imgSpace-- htmlImg parentDiv img naturalSize imgSpace
---     clicks moves downs ups dbls wheels
+  return $ ScaledImage htmlImg parentDiv img naturalSize imgSpace screenSpace
+    clicks moves downs ups dbls wheels
 
   where
     mkTopLevelAttrs (naturalWid, naturalHei) topAttrs topScale =
       let defAttrs =
                "class" =: "scaled-image-top"
-            <> "style" =: ("pointer-events:none;position:relative;overflow:hidden;width:" ++ show (fI naturalWid * topScale)
+            <> "style" =: ("pointer-events:none;position:relative;overflow:hidden;width:"
+                           ++ show (fI naturalWid * topScale)
                            ++ "px;height:" ++ show (fI naturalHei * topScale) ++ "px;")
       in Map.unionWith (++) defAttrs topAttrs
 
-    mkCroppingAttrs (natWid, natHei) bnd scale (offX, offY) attrs extStyle =
+    mkShiftScreenPix (natX, natY) bounding s =
+      let (bX0,bY0) = maybe (0,0) (\(BoundingBox (Coord x y) _) -> (x,y)) bounding
+      in  ((bX0 + natX)*s, (bY0 + natY)*s)
+
+    mkCroppingAttrs (natWid, natHei) bnd scale (offXPx, offYPx) attrs extStyle =
      let sizingStyle = case bnd of
            Nothing ->
              let w :: Int = round $ fI natWid * scale
                  h :: Int = round $ fI natHei * scale
-                 x :: Int = round $ offX
-                 y :: Int = round $ offY
+                 x :: Int = round $ offXPx
+                 y :: Int = round $ offYPx
              in  "width:" ++ show w ++ "px; height: " ++ show h ++
                  "px; left:" ++ show x ++ "px;top:" ++ show y ++ "px;"
            Just (BoundingBox (Coord x0 y0) (Coord x1 y1)) ->
              let w :: Int = round $ (x1 - x0) * scale
                  h :: Int = round $ (y1 - y0) * scale
-                 x :: Int = round $ x0 * scale + offX
-                 y :: Int = round $ y0 * scale + offY
+                 x :: Int = round $ offXPx --(x0 + offX) * scale
+                 y :: Int = round $ offYPx -- (y0 + offY) * scale
              in ("width:" ++ show w ++ "px;height:" ++ show h ++ "px;" ++
                       "left:"  ++ show x ++ "px;top:"    ++ show y ++ "px;")
 
@@ -248,17 +258,21 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
       in   "src"   =: src
         <> "style" =: posPart
 
-    mkImgSpace scale = \(x,y) ->
-      (x / scale, y / scale)
+    mkImgSpace scale (imgOffX, imgOffY) = \(x,y) ->
+      ((x - imgOffX) / scale, (y - imgOffY) / scale)
 
-    relativizeEvent e f eventName = do
+    mkScreenSpace scale (imgOffX, imgOffY) = \(x,y)->
+      (scale * x + imgOffX, scale * y + imgOffY)
+
+    relativizeEvent e f eventName shiftScreenPix = do
+      i <- combineDyn (,) f shiftScreenPix
       evs <- wrapDomEvent e (`on` eventName) $ do
         ev   <- event
         Just br <- getBoundingClientRect e
         xOff <- (r2 . negate) <$> getLeft br
         yOff <- (r2 . negate) <$> getTop  br
         liftM2 (,) (((+ xOff). fI) <$> getClientX ev) (((+ yOff) . fI) <$> getClientY ev)
-      return $ attachWith ($) (current f) evs
+      return $ attachWith (\(f,(dx,dy)) (x,y) -> f $ (x+dx,y+dy)) (current i) evs
 
 
 fI :: (Integral a, RealFrac b) => a -> b
