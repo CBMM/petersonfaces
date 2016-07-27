@@ -33,9 +33,9 @@ run' :: MonadWidget t m => m ()
 run' = do
   wid :: Dynamic t (Maybe Double) <- readInput "Width" (Just 800)
   attrs <- forDyn wid $ \w -> "style" =: ("width:" <> show (fromMaybe 100 w) <> "px;")
-  content <- fmap fst $ elDynAttr' "div" attrs $ do
+  content <- fmap fst $ elStopPropagationNS Nothing "div" Wheel $ elDynAttr' "div" attrs $ do
     tn <- thumbnail (ThumbnailConfig { tcSourceImage = testimg
-                                     , tcAttributes   = attrs}) undefined
+                                     , tcAttributes   = attrs}) (faceWidget)
     return ()
   return ()
 

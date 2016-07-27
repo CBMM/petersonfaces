@@ -30,6 +30,8 @@ import           Control.Monad            (liftM2)
 import           Control.Monad.IO.Class   (MonadIO, liftIO)
 import           Data.Bool
 import           Data.Default             (Default, def)
+import           Data.List                ((\\))
+import           Data.Maybe               (isJust)
 import           Data.Map                 (Map)
 import qualified Data.Map                 as Map
 import           Data.Monoid              ((<>))
@@ -77,7 +79,7 @@ data Thumbnail t a = Thumbnail
 
 data ModelUpdate =
     DelSubPic Int
-  | AddSubPic
+  | AddSubPic Int ChildConfig
   | ModifyBox Int
   | SelBox Int
   | DeselectBoxes
@@ -88,23 +90,37 @@ data ModelUpdate =
   | SetNatSize (Int,Int)
   deriving (Eq, Show)
 
+data ChildConfig = ChildConfig { ccBounding :: BoundingBox }
+                 deriving (Eq, Ord, Show)
 
 data Model a = Model
   { _mFocus   :: (Double,Double)
   , _mZoom    :: Double
   , _mSelect  :: Maybe Int
-  -- , _mSubPics :: Map Int a
+  , _mSubPics :: Map Int ChildConfig
   , _mGeom    :: (Int,Int)
   , _mNatSize :: (Int,Int)
   } deriving (Eq, Show)
 
 model0 :: Model a
---model0 = Model (0,0) 1 Nothing mempty (0,0) (0,0)
-model0 = Model (0,0) 1 Nothing (0,0) (0,0)
+model0 = Model (0,0) 1 Nothing mempty (0,0) (0,0)
 
 makeLenses ''Model
 
-type ThumbnailChild t m a = Dynamic t (Double,Double) -> Dynamic t Double -> Int -> () -> Event t () -> m a
+type ThumbnailChild t m a =
+     Event   t (Double,Double)
+  -> Event   t ()
+  -> Dynamic t ((Double,Double) -> (Double,Double))
+  -> Dynamic t ((Double,Double) -> (Double,Double))
+  -> Dynamic t (Int,Int) -- ^ Natural size of base image
+  -> Dynamic t Double    -- ^ Zoom
+  -> Dynamic t (Double,Double) -- ^ Focus point
+  -> Dynamic t (Maybe Int)  -- ^ Selection index
+  -> Dynamic t Double  -- ^ Top-level scale
+  -> Int
+  -> ChildConfig -> Event t ChildConfig -> m a
+
+
 
 -- | A complicated widget used for panning, zooming, and region-selecting within an img
 --   Movement is achieved through clicks and mousewheels in a 'picture-in-picture' view
@@ -118,7 +134,7 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
 
   topAttrs <- combineDyn (Map.unionWith (++))
     (constDyn $ "class" =: "thumbnail-widget "
-             <> "style" =: "position:relative;")
+             <> "style" =: "position:relative; -webkit-user-select: none; user-select: none;")
     attrs
 
   firstLoad <- headE $ domEvent Load $ siImgEl $ tBigPicture tn
@@ -138,22 +154,20 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
                                         else fI wWid / fI natWid)
                 (tImageNaturalSize tn) topSize
 
-  display model
-  (resize,(tnWidget, (tn,model))) <- resizeDetectorWithStyle
-   "width:100%;height:100%;" $
-   elDynAttr' "div" topAttrs $ elStopPropagationNS Nothing "div" Wheel $
+  -- (resize,(tnWidget, (tn,model))) <- resizeDetectorWithStyle
+  --  "width:100%;height:100%;" $
+  --  elDynAttr' "div" topAttrs $ elStopPropagationNS Nothing "div" Wheel $
+  (tnWidget, (tn,model)) <- elDynAttr' "div" topAttrs $
    mdo
 
 
     let thumbPosition = ffor (updated $ siNaturalSize bigPic) $ \(natW, natH) ->
           (0.9 * fI natW :: Double, 0 :: Double)
 
-    zoom  <- mapDyn _mZoom  model
-    focus <- mapDyn _mFocus model
+    natSize <- mapDyn _mNatSize model
+    zoom    <- mapDyn _mZoom  model
+    focus   <- mapDyn _mFocus model
     zoomPos <- forDyn model $ \m -> (_mZoom m, _mFocus m) -- TODO cleanup
-
-    -- let imgLoadPosition = fmap (\(natW,natH) -> (fI natW / 2, fI natH / 2))
-    --       (tag (current $ siNaturalSize bigPic) (domEvent Load (siEl bigPic)))
 
     bigPicAttrs <- forDyn sel $ \case
       Nothing -> "class" =: "big-picture" <> "style" =: "position:absolute"
@@ -168,22 +182,25 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
         { sicInitialSource      = srcImg
         , sicCroppingAttributes = bigPicAttrs
         , sicTopLevelScale      = outerScale
-        , sicSetOffset          = setOffsets -- uncenteredOffsets bigPic thumbPosUpdates
+        , sicSetOffset          = setOffsets
         , sicSetScale           = updated zoom
         }
+
     performEvent $ fmap (liftIO . print) (imageSpaceClick bigPic)
     performEvent $ ffor (attach (current model) $ imageSpaceClick bigPic) $ \(m, (x,y)) ->
       liftIO (putStrLn $ "widgetspace: " ++ show (imageSpaceToWidgetSpace m (x,y)))
 
     let okToAddSelection = fmap (== Nothing) (current sel)
-        newSelectionPos (z,(wid,hei)) (x,y) =
+        newSelectionPos (z,(wid,hei),k) (x,y) =
             let (boxWid,boxHei) = (fI wid / z / 4, fI hei / z / 4)
                 topLeft  = Coord (max 0 $ x - boxWid/2)            (max 0 $ y - boxHei/2)
                 botRight = Coord (min (fI wid - 1) $ x + boxWid/2) (min (fI hei - 1) $ y + boxHei/2)
-            in  AddSubPic -- (BoundingBox topLeft botRight)
+            in  AddSubPic k (ChildConfig $ BoundingBox topLeft botRight)
         addSel = gate okToAddSelection $
                  attachWith newSelectionPos
-                            ((,) <$> current zoom <*> current (siNaturalSize bigPic))
+                            ((,,) <$> current zoom
+                                  <*> current (siNaturalSize bigPic)
+                                  <*> fmap (nextKey . _mSubPics) (current model))
                             (imageSpaceDblClick bigPic)
 
     model :: Dynamic t (Model a) <- foldDyn applyModelUpdate model0
@@ -191,19 +208,25 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
                                         ,updated natSizes
                                         -- ,fmap snd subPicEvents
                                         -- ,AddSubPic testBox <$ pb'
-                                        ,topResizes
-                                        -- ,addSel
+                                        , topResizes
+                                        , addSel
                                         , zooms
                                         ])
 
-    let newChild = never
-    subPics <- listWithKeyShallowDiff mempty newChild (mkChild focus zoom)
-    -- subPicEvents :: Event t (Int, ModelUpdate a) <- selectMayViewListWithKey sel subPics
-    --   (subPicture srcImg bigPic setOffsets zoom focus outerScale)
+    let mousemoves = fmap (bimap fI fI) $ domEvent Mousemove (siEl bigPic)
+        dragEnds   = leftmost [() <$ domEvent Mouseup (siEl bigPic)]
+    selKey <- mapDyn _mSelect model
+    topScale <- forDyn model (\m -> fI (fst (_mGeom m)) /
+                                    fI (fst (_mNatSize m)))
+    let newChild = ffor addSel $ \(AddSubPic k cfg) -> k =: Just cfg
+    subPics <- listWithKeyShallowDiff
+      mempty newChild (mkChild mousemoves dragEnds (screenToImageSpace bigPic)
+                       (widgetToScreenSpace bigPic)
+                       natSize zoom focus selKey topScale)
 
     thumbScale <- mapDyn (/4) outerScale
     thumbPic :: ScaledImage t <- elAttr "div"
-      ("style" =: "position:absolute;opacity:0.5;" <>
+      ("style" =: "position:absolute;opacity:0.5;top:0px;" <>
        "class" =: "thumbnail-navigator") $
       scaledImage def { sicInitialSource = srcImg
                       , sicInitialScale  = 1
@@ -230,40 +253,182 @@ uncenteredOffsets bigPic thumbPosUpdates =
   (fI w/2 - x, fI h/2 - y)
 
 modelOffset :: Model a -> (Double, Double)
-modelOffset m = let (fX,fY) = _mFocus m
-                    (nW,nH) = bimap fI fI $ _mNatSize m
-                    -- s      = fI (fst (_mGeom m)) / nW
-                    -- s = 1
-                    s       = 1 / _mZoom m
-                in  ((nW/2)*s - fX, (nH/2)*s - fY)
+modelOffset m = getOffset (_mNatSize m) (_mFocus m) (_mZoom m)
 
-getOffset :: (Double,Double) -> (Double,Double) -> Double -> (Double,Double)
-getOffset (natW,natH) (focX,focY) zoom = (natW/2/zoom - focX, natH/2/zoom - focY)
+getOffset :: (Int,Int) -> (Double,Double) -> Double -> (Double,Double)
+getOffset (natW,natH) (focX,focY) zoom = (fI natW/2/zoom - focX, fI natH/2/zoom - focY)
 
-imageToWidget :: Model a -> (Double,Double) -> (Double,Double)
-imageToWidget m (x,y) = let (offX,offY) = modelOffset m
-                            s           = _mZoom m
-                        in  ((x - offX)/s, (y - offY)/s)
+imageToWidget :: (Int, Int) -> (Double,Double) -> Double -> (Double, Double) -> (Double, Double)
+imageToWidget natGeom (focX, focY) s (x,y) =
+  let (offX,offY) = getOffset natGeom (focX,focY) s
+  in ((x - offX)/s, (y - offY)/s)
 
-widgetToImage :: Model a -> (Double,Double) -> (Double,Double)
-widgetToImage m (x,y) = let (offX,offY) = modelOffset m
-                            s           = _mZoom m
-                        in (s*x + offX, s*y + offY)
+widgetToImage :: (Int,Int) -> (Double,Double) -> Double -> (Double,Double) -> (Double,Double)
+widgetToImage natGeom (focX,focY) s (x,y) =
+  let (offX,offY) = getOffset natGeom (focX,focY) s
+  in (s*x + offX, s*y + offY)
+
+type FaceFeature = (String, (Double,Double))
+type FaceUpdate = Map Int (Maybe FaceFeature)
+data Face = Face { faceFeatures ::  Map Int FaceFeature }
+
+
+faceWidget :: forall t m.MonadWidget t m
+           -- => Dynamic t (Int,Int)
+           => Event t (Double,Double)
+           -> Event t ()
+           -> Dynamic t ((Double,Double) -> (Double,Double))
+           -> Dynamic t ((Double,Double) -> (Double,Double))
+           -> Dynamic t (Int,Int) -- ^ Parent image natural size
+           -> Dynamic t Double
+           -> Dynamic t (Double,Double)
+           -> Dynamic t (Maybe Int)
+           -> Dynamic t Double
+           -> Int
+           -> ChildConfig
+           -> Event t ChildConfig
+           -> m (Dynamic t Face)
+faceWidget mouseMoves dragEnds imgToWidg widgToImg natSize zoom focus selKey topScale k cfg0 dCfg = mdo
+  pb <- getPostBuild
+  rect <- mapDyn ccBounding =<< holdDyn cfg0 dCfg
+  let relativeFeatures natGeom foc z =
+        -- let (wid,hei) = bimap fI fI natGeom
+        -- in fmap (second $ widgetToImage natGeom foc z) $
+        --    Map.fromList [(0,("Eye",   (wid/2 - 50,hei/2 - 20)))
+        --                 ,(1,("Eye",   (wid/2 + 50,hei/2 - 20)))
+        --                 ,(2,("Nose",  (wid/2, hei/2)))
+        --                 ,(3,("Mouth", (wid/2, hei/2 + 50)))
+        --                 ]
+        let ChildConfig (BoundingBox (Coord bX0 bY0) (Coord bX1 bY1)) = cfg0
+            (wid,hei) = (bX1 - bX0, bY1 - bY0)
+        in   Map.fromList [(0,("Eye",   (bX0 + wid/2 - 50, bY0 + hei/2 - 20)))
+                          ,(1,("Eye",   (bX0 + wid/2 + 50,  bY0 + hei/2 - 20)))
+                          ,(2,("Nose",  (bX0 + wid/2, bY0 + hei/2)))
+                          ,(3,("Mouth", (bX0 + wid/2, bY0 + hei/2 + 50)))
+                          ]
+
+      geomInfo = (,,) <$> current natSize <*> current focus <*> current zoom
+      defFeatures :: Event t FaceUpdate = ffor (tag geomInfo pb) $ \(s,f,z) ->
+        fmap Just (relativeFeatures s f z)
+      faceUpdates = leftmost [defFeatures, faceDeletions]
+
+  -- facePartEvents <- divImgSpace widgToImg rect (constDyn ("class" =: "face" <> "style" =: "border: 1px solid black;")) $
+  --  elAttr "div" ("class" =: "face-features-container" <> "style" =: "position: absolute; width:100%; height: 100%;") $
+  --     listWithKeyShallowDiff mempty faceUpdates (faceFeatureWidget imgToWidg widgToImg rect)
+  facePartEvents <- listWithKeyShallowDiff mempty faceUpdates (faceFeatureWidget mouseMoves dragEnds imgToWidg widgToImg rect)
+  faceParts :: Dynamic t (Map Int FaceFeature) <- joinDynThroughMap <$> mapDyn (fmap fst) facePartEvents
+
+  faceDeletions <- fmap ((fmap . fmap) (const Nothing) . switchPromptlyDyn) $
+    mapDyn (mergeMap . fmap snd) facePartEvents
+  mapDyn Face faceParts
+
+
+faceFeatureWidget :: forall t m. MonadWidget t m
+                  => Event t (Double,Double)
+                  -> Event t ()
+                  -> Dynamic t ((Double,Double) -> (Double,Double))
+                  -> Dynamic t ((Double,Double) -> (Double,Double))
+                  -> Dynamic t BoundingBox
+                  -> Int
+                  -> FaceFeature
+                  -> Event t FaceFeature
+                  -> m (Dynamic t FaceFeature, Event t ())
+faceFeatureWidget externalMoves externalEnds toImg fmImg bounding k f0 dF = mdo
+  pb <- getPostBuild
+  -- ff :: Dynamic t FaceFeature <- foldDyn ($) f0 $
+  --   leftmost [ fmap const dF, fUpdates ]
+  ff :: Dynamic t FaceFeature <- holdDyn f0 $ leftmost [ dF, fUpdates ]
+
+  let (divWid,divHei) :: (Double,Double) = (20,20)
+  featureAttrs <- combineDyn
+    (\f (nm,(x,y)) ->
+      let (wX,wY) = f (x,y)
+          xOff = "left: " ++ show (wX - divWid/2) ++ "px"
+          yOff = "top: " ++ show (wY - divHei/2) ++ "px"
+          wid  = "width: " ++ show divWid ++ "px"
+          hei  = "height: " ++ show divHei ++ "px"
+          -- xOff = "left: " ++ show (wX) ++ "px"
+          -- yOff = "top: " ++ show (wY) ++ "px"
+          -- wid  = "width: " ++ show divWid ++ "px"
+          -- hei  = "height: " ++ show divHei ++ "px"
+
+          styl = "position: absolute; border: 1px solid rgba(0,0,0,0.5); background-color: hsla(0,100%,100%,0.25); border-radius:200px"
+      in  "style" =: mconcat (map (++ ";") [styl, xOff, yOff, wid, hei]) <> "class" =: "face-feature"
+    ) fmImg ff
+  --(ffDiv, dels) <- divImgSpace' fmImg bounding (constDyn $ "class" =: "face-feature") $ do
+  (ffDiv, dels) <- elDynAttr' "div" featureAttrs $
+   elAttr "div" ("class" =: "face-feature-container" <> "style" =: "position:absolute;") $ do
+    elAttr "div" ("class" =: "face-feature-dot"
+                 <> "style" =: ("position:absolute; top: " <>
+                                show (divHei/2 - 2) <> "px; left: " <>
+                                show (divWid/2 - 2) <> "px; width:4px; height:4px;" <>
+                                "background-color:black;border-radius:5px;")) (return ())
+    closes <- elAttr "div" ("class" =: "face-feature-info" <> "style" =: "position: absolute; left: 20px;top:-20px;") $
+      elAttr "div" ("class" =: "face-feature-delete" <> "style" =:
+                    "position:absolute; background-color:rgba(255,255,255,0.5); border-radius:2px; padding: 1px; ") $ do
+        text (fst f0)
+        fmap (domEvent Click . fst) $
+          elAttr' "span" ("class" =: "button" <> "style" =:
+                          "color:hsla(3,50%,50%,1); text-shadow:1px 1px rgba(0,0,0,0.5);border-left: 1px solid gray; margin-left: 3px;") $ text "✗"
+    return closes
+
+  let wrapDrag e = wrapDomEvent (_el_element ffDiv) (`on` e) $ do
+        ev <- event
+        (,) <$> liftIO (getClientX ev) <*> liftIO (getClientY ev)
+  drStarts <- wrapDrag E.dragStart
+  drMoves  <- wrapDrag E.drag
+  drEnds   <- wrapDrag E.dragEnd
+  performEvent (liftIO (print "DragStart") <$ drStarts)
+  performEvent (liftIO (print "DragMove") <$ drMoves)
+  let starts = fmap (bimap fI fI) (domEvent Mousedown ffDiv)
+      ends   = leftmost [externalEnds, () <$ domEvent Mouseup ffDiv]
+      moves  = leftmost [fmap (bimap fI fI) (domEvent Mousemove ffDiv), externalMoves]
+
+  -- performEvent (fmap (liftIO . print . ("START: " ++) . show) starts)
+  -- performEvent (fmap (liftIO . print . ("MOVE: " ++)  . show) moves)
+  -- performEvent (fmap (liftIO . print . ("END: " ++)   . show) ends)
+
+  draggingOrigin :: Dynamic t (Maybe (FaceFeature, (Double,Double))) <- holdDyn Nothing $ leftmost
+    [ fmap Just (attach (current ff) (imgSpace starts))
+    -- , fmap Just (attach (current ff) (imgSpace (domEvent Mousedown ffDiv)))
+    , Nothing <$ ends
+    ] -- domEvent Mouseup ffDiv]
+  isDragging <- mapDyn isJust draggingOrigin
+  let imgSpace es = attachWith ($) (current toImg) es
+      fUpdates :: Event t FaceFeature
+      fUpdates = fmapMaybe id (attachWith (\orig (x,y) -> case orig of
+                                              Nothing      -> Nothing
+                                              Just ((nm,(oldX,oldY)), (x0,y0)) -> Just (nm, (oldX + x - x0, oldY + y - y0))
+
+                                          ) (current draggingOrigin) (imgSpace moves)) -- (imgSpace $ domEvent Mousemove ffDiv))
+
+      -- fUpdates = fmapMaybe id (attach (current draggingOrigin) (imgSpace (domEvent Mousemove ffDiv)) $ \(orig,(x,y)) -> case orig of
+      --                                 Nothing      -> Nothing
+      --                                 Just ((nm,(oldX,oldY)), (x0,y0)) -> Just (nm, (oldX + x - x0, oldY + y - y0)))
+
+      -- fUpdates = ffor (gate (current isDragging) $ imgSpace (domEvent Mousemove ffDiv)) $ \(x,y) (nm,_) ->
+      --   (nm,  (x,y))
+
+  return (ff, dels) -- TODO: Catch delete events
+
 
 subPicture :: MonadWidget t m
            => String -- ^ image src
-           -> ScaledImage t
-           -> Event t (Double,Double)
+           -> Dynamic t (Int,Int) -- ^ Parent image natural size
            -> Dynamic t Double -- ^ zoom
            -> Dynamic t (Double,Double) -- ^ focus point
+           -> Dynamic t (Maybe Int) -- ^ Selection key?
            -> Dynamic t Double -- ^ Top level (whole-widget) extra scaling
            -> Int -- ^ Key
-           -> Dynamic t BoundingBox -- ^ Result rect
-           -> Dynamic t Bool -- ^ Selected?
+           -> ChildConfig
+           -> Event t ChildConfig
            -> m (Event t ModelUpdate)
-subPicture srcImg bigPic setOffsets zoom focus topScale k rect isSel = mdo
+subPicture srcImg natSize zoom focus selKey topScale k cfg0 dCfg = mdo
   pb <- getPostBuild
 
+  isSel <- mapDyn (== Just k) selKey
+  rect <- mapDyn ccBounding =<< holdDyn cfg0 dCfg
+  setOffsets' <- getOffset `mapDyn` natSize `apDyn` focus `apDyn` zoom
   subPicAttrs <- mkSubPicAttrs `mapDyn` isSel
   (e,(img,dels,dones,zooms)) <- elDynAttr' "div" subPicAttrs $ do
 
@@ -271,7 +436,7 @@ subPicture srcImg bigPic setOffsets zoom focus topScale k rect isSel = mdo
            { sicInitialSource   = srcImg
            , sicTopLevelScale   = topScale
            , sicSetScale        = updated zoom
-           , sicSetOffset       = setOffsets -- uncenteredOffsets bigPic $ leftmost [updated focus, tag (current focus) pb]
+           , sicSetOffset       = updated setOffsets'
            , sicSetBounding     = fmap Just . leftmost $ [tag (current rect) pb, updated rect]
            }
     dels  <- fmap (DelSubPic k <$)
@@ -330,7 +495,7 @@ widgetSpaceToImageSpace m (x',y') =
 applyModelUpdate :: ModelUpdate -> Model a -> Model a
 applyModelUpdate (DelSubPic k  ) m = m -- & over mSubPics (Map.delete k)
                                        & set  mSelect  Nothing
-applyModelUpdate (AddSubPic  )     m = error "Used AddSubPic"
+applyModelUpdate (AddSubPic k cfg ) m = m & over mSubPics (Map.insert k cfg)
   -- let k = maybe 0 (succ . fst . fst) (Map.maxViewWithKey $ _mSubPics m)
   -- in m -- & over mSubPics (Map.insert k b)
   --      & set  mSelect (Just k)
@@ -421,15 +586,11 @@ testModel :: Model BoundingBox
 testModel = Model { _mFocus = (200.0,174.5)
                   , _mZoom = 1.0
                   , _mSelect = Just 0
-                  -- , _mSubPics = Map.fromList [(0,BoundingBox
-                  --                              {bbTopLeft =
-                  --                               Coord { coordX = 100.0
-                  --                                     , coordY = 100.0}
-                  --                              ,bbBotRight =
-                  --                               Coord {coordX = 200.0
-                  --                                     , coordY = 200.0}})
-                  --                            ]
+                  , _mSubPics = mempty
                   , _mGeom = (800,698)
                   , _mNatSize = (400,349)
                   }
 
+
+nextKey :: Map Int v -> Int
+nextKey m = head ([0..length m] \\ Map.keys m)

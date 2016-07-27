@@ -45,7 +45,9 @@ module ScaledImage (
   ClientRect(..),
   getWidth,
   getHeight,
-  getBoundingClientRect
+  getBoundingClientRect,
+  divImgSpace',
+  divImgSpace
 )where
 
 import           Control.Monad            (liftM2)
@@ -54,6 +56,7 @@ import           Data.Bool
 import           Data.Default             (Default, def)
 import           Data.Map                 (Map)
 import qualified Data.Map                 as Map
+import           Data.Maybe               (fromMaybe)
 import           Data.Monoid              ((<>))
 import           Reflex.Dom               hiding (restore)
 #ifdef ghcjs_HOST_OS
@@ -140,7 +143,6 @@ data ScaledImage t = ScaledImage
 --     - a parent div fixed to the size of the source image,
 --     - a cropping div
 --     - the source image
-
 scaledImage :: MonadWidget t m => ScaledImageConfig t -> m (ScaledImage t)
 scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle trans0 dTrans
              scale0 dScale bounding0 dBounding) = mdo
@@ -164,8 +166,9 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
 
   parentAttrs <- mkTopLevelAttrs `mapDyn` naturalSize `apDyn` topAttrs `apDyn` topScale
 
-  (resizes,(parentDiv, (img, imgSpace, screenSpace))) <- resizeDetector $
-   elDynAttr' "div" parentAttrs $ do
+  -- (resizes,(parentDiv, (img, imgSpace, screenSpace))) <- resizeDetector $
+  --  elDynAttr' "div" parentAttrs $ do
+  (parentDiv, (img, imgSpace, screenSpace)) <- elDynAttr' "div" parentAttrs $ do
 
     croppingAttrs  <- mkCroppingAttrs
       `mapDyn` naturalSize    `apDyn` bounding  `apDyn` scale
@@ -274,6 +277,40 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
         liftM2 (,) (((+ xOff). fI) <$> getClientX ev) (((+ yOff) . fI) <$> getClientY ev)
       return $ attachWith (\(f,(dx,dy)) (x,y) -> f $ (x+dx,y+dy)) (current i) evs
 
+
+divImgSpace' :: MonadWidget t m
+             => Dynamic t ((Double,Double) -> (Double,Double))
+             -> Dynamic t BoundingBox
+             -> Dynamic t (Map String String)
+             -> m a
+             -> m (El t, a)
+divImgSpace' toWidgetSpace bounding attrs children = do
+  widgetPos <- combineDyn
+    (\f bb -> let (x0,y0) = f (coordX (bbTopLeft bb), coordY (bbTopLeft bb))
+                  (x1,y1) = f (coordX (bbBotRight bb), coordY (bbBotRight bb))
+              in  ((x0,y0), (x1-x0, y1-y0))
+    ) toWidgetSpace bounding
+
+  attrs' <- traceDyn "trace" <$> combineDyn
+    (\((x0,y0), (w,h)) ats ->
+      let left = "left: "   ++ show x0  ++ "px;"
+          top  = "top: "    ++ show y0  ++ "px;"
+          wid  = "width: "  ++ show w ++ "px;"
+          hei  = "height: " ++ show h ++ "px;"
+          thisStyle = "position: relative; " ++ mconcat [left, top, wid, hei]
+          style' = thisStyle ++ fromMaybe "" (Map.lookup "sytle" ats)
+      in (Map.insert "style" style' ats) -- , "style" =: thisStyle)
+    ) widgetPos attrs
+  elDynAttr' "div" attrs' children
+
+
+divImgSpace :: MonadWidget t m
+            => Dynamic t ((Double,Double) -> (Double,Double))
+            -> Dynamic t BoundingBox
+            -> Dynamic t (Map String String)
+            -> m a
+            -> m a
+divImgSpace f b a c = fmap snd $ divImgSpace' f b a c
 
 fI :: (Integral a, RealFrac b) => a -> b
 fI = fromIntegral
