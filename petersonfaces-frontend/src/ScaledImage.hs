@@ -21,7 +21,7 @@ The crop is in dimensions of the natural size of the image
 frame of the original imaage.
 -}
 
-
+{-# language BangPatterns #-}
 {-# language CPP #-}
 {-# language RecursiveDo #-}
 {-# language KindSignatures #-}
@@ -81,19 +81,19 @@ import qualified GHCJS.DOM.Element        as E
 
 
 data Coord = Coord
-  { coordX :: Double
-  , coordY :: Double
+  { coordX :: !Double
+  , coordY :: !Double
   } deriving (Eq, Show, Ord, Read)
 
 data BoundingBox = BoundingBox
-  { bbTopLeft  :: Coord
-  , bbBotRight :: Coord
+  { bbTopLeft  :: !Coord
+  , bbBotRight :: !Coord
   } deriving (Eq, Show, Ord, Read)
 
 
 data ScaledImageConfig t = ScaledImageConfig
   { sicInitialSource :: String
-  , sicSetSource :: Event t String
+  , sicSetSource     :: Event t String
   , sicTopLevelScale :: Dynamic t Double
   , sicTopLevelAttributes :: Dynamic t (Map String String)
   , sicCroppingAttributes :: Dynamic t (Map String String)
@@ -118,12 +118,6 @@ data ScaledImage t = ScaledImage
   , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
   , widgetToScreenSpace :: Dynamic t ((Double,Double) -> (Double, Double))
-  -- , imageSpaceClick     :: Event t (Double, Double)
-  -- , imageSpaceMousemove :: Event t (Double, Double)
-  -- , imageSpaceMousedown :: Event t (Double, Double)
-  -- , imageSpaceMouseup   :: Event t (Double, Double)
-  -- , imageSpaceDblClick  :: Event t (Double, Double)
-  -- , imageSpaceWheel     :: Event t (Double, (Double,Double))
   }
 
 -- TODO: This kind of pattern seems to come up a lot. I began trying to generalize it here,
@@ -144,6 +138,7 @@ data ScaledImage t = ScaledImage
 --     - a parent div fixed to the size of the source image,
 --     - a cropping div
 --     - the source image
+
 scaledImage :: MonadWidget t m => ScaledImageConfig t -> m (ScaledImage t)
 scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle trans0 dTrans
              scale0 dScale bounding0 dBounding) = mdo

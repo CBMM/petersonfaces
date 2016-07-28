@@ -26,6 +26,8 @@ executable petersonfaces-frontend
                      , petersonfaces-common
                      , reflex
                      , reflex-dom
+                     , text
+                     , time
                      , transformers
   if impl(ghcjs)
      build-depends: ghcjs-base

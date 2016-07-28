@@ -18,6 +18,7 @@ it also allows selecting multiple rectangular regions in the image (this should 
 {-# language LambdaCase #-}
 {-# language RankNTypes #-}
 {-# language TypeFamilies #-}
+{-# language OverloadedStrings #-}
 {-# language TemplateHaskell #-}
 {-# language ScopedTypeVariables #-}
 
@@ -35,6 +36,7 @@ import           Data.Maybe               (isJust)
 import           Data.Map                 (Map)
 import qualified Data.Map                 as Map
 import           Data.Monoid              ((<>))
+import qualified Data.Text                as T
 import           Reflex.Dom               hiding (restore)
 import           GHCJS.DOM.EventM         (EventM)
 #ifdef ghcjs_HOST_OS
@@ -295,13 +297,6 @@ faceWidget mouseMoves dragEnds imgToWidg widgToImg natSize zoom focus selKey top
   pb <- getPostBuild
   rect <- mapDyn ccBounding =<< holdDyn cfg0 dCfg
   let relativeFeatures natGeom foc z =
-        -- let (wid,hei) = bimap fI fI natGeom
-        -- in fmap (second $ widgetToImage natGeom foc z) $
-        --    Map.fromList [(0,("Eye",   (wid/2 - 50,hei/2 - 20)))
-        --                 ,(1,("Eye",   (wid/2 + 50,hei/2 - 20)))
-        --                 ,(2,("Nose",  (wid/2, hei/2)))
-        --                 ,(3,("Mouth", (wid/2, hei/2 + 50)))
-        --                 ]
         let ChildConfig (BoundingBox (Coord bX0 bY0) (Coord bX1 bY1)) = cfg0
             (wid,hei) = (bX1 - bX0, bY1 - bY0)
         in   Map.fromList [(0,("Eye",   (bX0 + wid/2 - 50, bY0 + hei/2 - 20)))
@@ -315,9 +310,6 @@ faceWidget mouseMoves dragEnds imgToWidg widgToImg natSize zoom focus selKey top
         fmap Just (relativeFeatures s f z)
       faceUpdates = leftmost [defFeatures, faceDeletions]
 
-  -- facePartEvents <- divImgSpace widgToImg rect (constDyn ("class" =: "face" <> "style" =: "border: 1px solid black;")) $
-  --  elAttr "div" ("class" =: "face-features-container" <> "style" =: "position: absolute; width:100%; height: 100%;") $
-  --     listWithKeyShallowDiff mempty faceUpdates (faceFeatureWidget imgToWidg widgToImg rect)
   facePartEvents <- listWithKeyShallowDiff mempty faceUpdates (faceFeatureWidget mouseMoves dragEnds imgToWidg widgToImg rect)
   faceParts :: Dynamic t (Map Int FaceFeature) <- joinDynThroughMap <$> mapDyn (fmap fst) facePartEvents
 
@@ -338,27 +330,21 @@ faceFeatureWidget :: forall t m. MonadWidget t m
                   -> m (Dynamic t FaceFeature, Event t ())
 faceFeatureWidget externalMoves externalEnds toImg fmImg bounding k f0 dF = mdo
   pb <- getPostBuild
-  -- ff :: Dynamic t FaceFeature <- foldDyn ($) f0 $
-  --   leftmost [ fmap const dF, fUpdates ]
-  ff :: Dynamic t FaceFeature <- holdDyn f0 $ leftmost [ dF, fUpdates ]
+  -- ff :: Dynamic t FaceFeature <- fmap (traceDyn "TEST") $ holdDyn f0 $ leftmost [ dF, fUpdates ]
+  ff :: Dynamic t FaceFeature <- holdDyn f0 $ fUpdates -- leftmost [ traceEvent "dF" dF, fUpdates ]
 
   let (divWid,divHei) :: (Double,Double) = (20,20)
   featureAttrs <- combineDyn
     (\f (nm,(x,y)) ->
       let (wX,wY) = f (x,y)
-          xOff = "left: " ++ show (wX - divWid/2) ++ "px"
-          yOff = "top: " ++ show (wY - divHei/2) ++ "px"
-          wid  = "width: " ++ show divWid ++ "px"
-          hei  = "height: " ++ show divHei ++ "px"
-          -- xOff = "left: " ++ show (wX) ++ "px"
-          -- yOff = "top: " ++ show (wY) ++ "px"
-          -- wid  = "width: " ++ show divWid ++ "px"
-          -- hei  = "height: " ++ show divHei ++ "px"
+          xOff = "left: " <> T.pack (show (wX - divWid/2)) <> "px;"
+          yOff = "top: " <> T.pack (show (wY - divHei/2)) <> "px;"
+          wid  = "width: " <> T.pack (show divWid) <> "px;"
+          hei  = "height: " <> T.pack (show divHei) <> "px;"
 
-          styl = "position: absolute; border: 1px solid rgba(0,0,0,0.5); background-color: hsla(0,100%,100%,0.25); border-radius:200px"
-      in  "style" =: mconcat (map (++ ";") [styl, xOff, yOff, wid, hei]) <> "class" =: "face-feature"
+          styl = "position: absolute; border: 1px solid rgba(0,0,0,0.5); background-color: hsla(0,100%,100%,0.25); border-radius:200px;"
+      in  "style" =: T.unpack ( xOff <> yOff <> wid <> hei <> styl) <> "class" =: "face-feature"
     ) fmImg ff
-  --(ffDiv, dels) <- divImgSpace' fmImg bounding (constDyn $ "class" =: "face-feature") $ do
   (ffDiv, dels) <- elDynAttr' "div" featureAttrs $
    elAttr "div" ("class" =: "face-feature-container" <> "style" =: "position:absolute;") $ do
     elAttr "div" ("class" =: "face-feature-dot"
@@ -375,14 +361,9 @@ faceFeatureWidget externalMoves externalEnds toImg fmImg bounding k f0 dF = mdo
                           "color:hsla(3,50%,50%,1); text-shadow:1px 1px rgba(0,0,0,0.5);border-left: 1px solid gray; margin-left: 3px;") $ text "✗"
     return closes
 
-  let wrapDrag e = wrapDomEvent (_el_element ffDiv) (`on` e) $ do
-        ev <- event
-        (,) <$> liftIO (getClientX ev) <*> liftIO (getClientY ev)
-  drStarts <- wrapDrag E.dragStart
-  drMoves  <- wrapDrag E.drag
-  drEnds   <- wrapDrag E.dragEnd
-  performEvent (liftIO (print "DragStart") <$ drStarts)
-  performEvent (liftIO (print "DragMove") <$ drMoves)
+  -- let wrapDrag e = wrapDomEvent (_el_element ffDiv) (`on` e) $ do
+  --       ev <- event
+  --       (,) <$> liftIO (getClientX ev) <*> liftIO (getClientY ev)
   let starts = fmap (bimap fI fI) (domEvent Mousedown ffDiv)
       ends   = leftmost [externalEnds, () <$ domEvent Mouseup ffDiv]
       moves  = leftmost [fmap (bimap fI fI) (domEvent Mousemove ffDiv), externalMoves]

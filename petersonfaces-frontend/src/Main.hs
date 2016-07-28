@@ -6,10 +6,12 @@
 module Main where
 
 import Control.Applicative (liftA2)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad (liftM2, liftM)
 import Data.Bool
 import Data.Maybe
 import Data.Monoid
+import Data.Time
 import FacesWidget
 import Canvas2D
 import Text.Read
@@ -31,6 +33,7 @@ testimg = "http://web.mit.edu/greghale/Public/frog-1.jpg"
 
 run' :: MonadWidget t m => m ()
 run' = do
+  t0 <- liftIO getCurrentTime
   wid :: Dynamic t (Maybe Double) <- readInput "Width" (Just 800)
   attrs <- forDyn wid $ \w -> "style" =: ("width:" <> show (fromMaybe 100 w) <> "px;")
   content <- fmap fst $ elStopPropagationNS Nothing "div" Wheel $ elDynAttr' "div" attrs $ do
@@ -38,6 +41,8 @@ run' = do
                                      , tcAttributes   = attrs}) (faceWidget)
     return ()
   return ()
+  -- t <- tickLossy 0.015 t0 
+  -- dynText =<< holdDyn "Waiting tick" (fmap (show . _tickInfo_n) t)
 
 -- run :: forall t m.MonadWidget t m => m ()
 -- run = mdo
