@@ -186,10 +186,11 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
         , sicSetScale           = updated zoom
         }
 
-    performEvent $ fmap (liftIO . print) (imageSpaceClick bigPic)
-    performEvent $ ffor (attach (current model) $ imageSpaceClick bigPic) $ \(m, (x,y)) ->
-      liftIO (putStrLn $ "widgetspace: " ++ show (imageSpaceToWidgetSpace m (x,y)))
+    -- performEvent $ fmap (liftIO . print) (imageSpaceClick bigPic)
+    -- performEvent $ ffor (attach (current model) $ imageSpaceClick bigPic) $ \(m, (x,y)) ->
+    --   liftIO (putStrLn $ "widgetspace: " ++ show (imageSpaceToWidgetSpace m (x,y)))
 
+    dblClicks <- wrapDomEvent (_el_element (siEl bigPic)) (`on` E.dblClick) getMouseEventCoords
     let okToAddSelection = fmap (== Nothing) (current sel)
         newSelectionPos (z,(wid,hei),k) (x,y) =
             let (boxWid,boxHei) = (fI wid / z / 4, fI hei / z / 4)
@@ -201,7 +202,7 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
                             ((,,) <$> current zoom
                                   <*> current (siNaturalSize bigPic)
                                   <*> fmap (nextKey . _mSubPics) (current model))
-                            (imageSpaceDblClick bigPic)
+                            (attachWith ($) (current $ screenToImageSpace bigPic) (fmap (bimap fI fI) dblClicks))
 
     model :: Dynamic t (Model a) <- foldDyn applyModelUpdate model0
         (traceEvent "" $ leftmost [fmap SetFocus thumbPosUpdates
@@ -209,7 +210,7 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
                                         -- ,fmap snd subPicEvents
                                         -- ,AddSubPic testBox <$ pb'
                                         , topResizes
-                                        , addSel
+                                        -- , addSel
                                         , zooms
                                         ])
 
@@ -233,9 +234,11 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
                       , sicTopLevelScale = thumbScale
                       }
 
-    let thumbPosUpdates = imageSpaceClick thumbPic
-        zooms           = fmap (\(dz,pnt) -> ZoomAbout (dz/200) pnt)
-          (imageSpaceWheel bigPic)
+    wheels <- wheelEvents (siEl bigPic)
+    let thumbPosUpdates = attachWith ($) (current $ screenToImageSpace thumbPic) (bimap fI fI <$> domEvent Mousedown (siEl thumbPic))
+        zooms           = attachWith (\f (dz, pnt) -> ZoomAbout (dz/200) (f pnt)) (current $ screenToImageSpace bigPic) wheels
+        -- zooms           = fmap (\(dz,pnt) -> ZoomAbout (dz/200) pnt)
+        --   (imageSpaceWheel bigPic)
 
     return $ (Thumbnail undefined undefined undefined (siNaturalSize  bigPic) bigPic, model)
 
@@ -402,94 +405,10 @@ faceFeatureWidget externalMoves externalEnds toImg fmImg bounding k f0 dF = mdo
 
                                           ) (current draggingOrigin) (imgSpace moves)) -- (imgSpace $ domEvent Mousemove ffDiv))
 
-      -- fUpdates = fmapMaybe id (attach (current draggingOrigin) (imgSpace (domEvent Mousemove ffDiv)) $ \(orig,(x,y)) -> case orig of
-      --                                 Nothing      -> Nothing
-      --                                 Just ((nm,(oldX,oldY)), (x0,y0)) -> Just (nm, (oldX + x - x0, oldY + y - y0)))
-
-      -- fUpdates = ffor (gate (current isDragging) $ imgSpace (domEvent Mousemove ffDiv)) $ \(x,y) (nm,_) ->
-      --   (nm,  (x,y))
-
   return (ff, dels) -- TODO: Catch delete events
 
 
-subPicture :: MonadWidget t m
-           => String -- ^ image src
-           -> Dynamic t (Int,Int) -- ^ Parent image natural size
-           -> Dynamic t Double -- ^ zoom
-           -> Dynamic t (Double,Double) -- ^ focus point
-           -> Dynamic t (Maybe Int) -- ^ Selection key?
-           -> Dynamic t Double -- ^ Top level (whole-widget) extra scaling
-           -> Int -- ^ Key
-           -> ChildConfig
-           -> Event t ChildConfig
-           -> m (Event t ModelUpdate)
-subPicture srcImg natSize zoom focus selKey topScale k cfg0 dCfg = mdo
-  pb <- getPostBuild
 
-  isSel <- mapDyn (== Just k) selKey
-  rect <- mapDyn ccBounding =<< holdDyn cfg0 dCfg
-  setOffsets' <- getOffset `mapDyn` natSize `apDyn` focus `apDyn` zoom
-  subPicAttrs <- mkSubPicAttrs `mapDyn` isSel
-  (e,(img,dels,dones,zooms)) <- elDynAttr' "div" subPicAttrs $ do
-
-    img <- scaledImage def
-           { sicInitialSource   = srcImg
-           , sicTopLevelScale   = topScale
-           , sicSetScale        = updated zoom
-           , sicSetOffset       = updated setOffsets'
-           , sicSetBounding     = fmap Just . leftmost $ [tag (current rect) pb, updated rect]
-           }
-    dels  <- fmap (DelSubPic k <$)
-           (elAttr "div" ("style" =: "pointer-events:auto;") $ button "x")
-    dones <- fmap (DeselectBoxes <$) (elAttr "div" ("style" =: "pointer-events:auto;") $ button "o")
-    let -- zooms = fmap (SetZoom . fst . first (/ 200)) $ imageSpaceWheel img
-        zooms = fmap (uncurry ZoomAbout) $ imageSpaceWheel img
-    return (img,dels, dones, zooms)
-
-  return $ leftmost [SelBox k <$ gate (not <$> current isSel)
-                                      (domEvent Click (siEl img))
-                    , dels
-                    , dones
-                    ]
-
-  where mkSubPicAttrs b = "class" =: "sub-picture-top"
-                       <> "style" =: ("pointer-events:none;position:absolute;top:0px;left:0px;"
-                                      ++ bool unselstyle selstyle b)
-          where unselstyle = "border: 1px solid black;"
-                selstyle   = "border: 1px solid black; box-shadow: 0px 0px 10px white;"
-
-
-imageSpaceToWidgetSpace :: Model a -> (Double,Double) -> (Double,Double)
-imageSpaceToWidgetSpace m (x,y) =
-  let (widNat, heiNat)   = bimap fI fI $ _mNatSize m
-      (widGeom,heiGeom)  = bimap fI fI $ _mGeom m
-      zm                 = _mZoom m
-      scaleCoeff         = widGeom / widNat * _mZoom m
-      (focusX,focusY)    = _mFocus m
-      -- How far was click from widget corner
-      -- click was (x,y) natural pixels from image corner
-      -- assuming the image was in the corner of the widget, widget-space click was:
-      -- But the image isn't in the widget's corner. The corner is offest
-      (xOff,yOff) = (focusX - widNat / 2, focusY - heiNat/2)
-      -- (x',y') = (x * widGeom / widNat * zm, y * heiGeom / heiNat * zm)
-      -- (x' - xOff, y' - yOff)
-      -- So our final coords:
-      -- In one step:
-      (x',y') = (x * widGeom / widNat * zm - xOff,
-                 y * heiGeom / heiNat * zm - yOff)
-  in  (x',y')
-
-
-widgetSpaceToImageSpace :: Model a -> (Double,Double) -> (Double,Double)
-widgetSpaceToImageSpace m (x',y') =
-  let (widNat, heiNat) = bimap fI fI $ _mNatSize m
-      (widGeom, heiGeom) = bimap fI fI $ _mGeom m
-      zm                 = _mZoom m
-      (focusX,focusY)    = _mFocus m
-      (xOff,yOff) = (focusX - widNat / 2, focusY - heiNat/2)
-      -- We'll just invert imageSpaceToWidgetSpace
-  in  ((x'+xOff)*widNat/widGeom/zm,
-       (y'+yOff)*heiNat/heiGeom/zm)
 
 -------------------------------------------------------------------------------
 applyModelUpdate :: ModelUpdate -> Model a -> Model a
@@ -594,3 +513,75 @@ testModel = Model { _mFocus = (200.0,174.5)
 
 nextKey :: Map Int v -> Int
 nextKey m = head ([0..length m] \\ Map.keys m)
+
+
+-- subPicture :: MonadWidget t m
+--            => String -- ^ image src
+--            -> Dynamic t (Int,Int) -- ^ Parent image natural size
+--            -> Dynamic t Double -- ^ zoom
+--            -> Dynamic t (Double,Double) -- ^ focus point
+--            -> Dynamic t (Maybe Int) -- ^ Selection key?
+--            -> Dynamic t Double -- ^ Top level (whole-widget) extra scaling
+--            -> Int -- ^ Key
+--            -> ChildConfig
+--            -> Event t ChildConfig
+--            -> m (Event t ModelUpdate)
+-- subPicture srcImg natSize zoom focus selKey topScale k cfg0 dCfg = mdo
+--   pb <- getPostBuild
+
+--   isSel <- mapDyn (== Just k) selKey
+--   rect <- mapDyn ccBounding =<< holdDyn cfg0 dCfg
+--   setOffsets' <- getOffset `mapDyn` natSize `apDyn` focus `apDyn` zoom
+--   subPicAttrs <- mkSubPicAttrs `mapDyn` isSel
+--   (e,(img,dels,dones,zooms)) <- elDynAttr' "div" subPicAttrs $ do
+
+--     img <- scaledImage def
+--            { sicInitialSource   = srcImg
+--            , sicTopLevelScale   = topScale
+--            , sicSetScale        = updated zoom
+--            , sicSetOffset       = updated setOffsets'
+--            , sicSetBounding     = fmap Just . leftmost $ [tag (current rect) pb, updated rect]
+--            }
+--     dels  <- fmap (DelSubPic k <$)
+--            (elAttr "div" ("style" =: "pointer-events:auto;") $ button "x")
+--     dones <- fmap (DeselectBoxes <$) (elAttr "div" ("style" =: "pointer-events:auto;") $ button "o")
+--     let -- zooms = fmap (SetZoom . fst . first (/ 200)) $ imageSpaceWheel img
+--         zooms = fmap (uncurry ZoomAbout) $ imageSpaceWheel img
+--     return (img,dels, dones, zooms)
+
+--   return $ leftmost [SelBox k <$ gate (not <$> current isSel)
+--                                       (domEvent Click (siEl img))
+--                     , dels
+--                     , dones
+--                     ]
+
+--   where mkSubPicAttrs b = "class" =: "sub-picture-top"
+--                        <> "style" =: ("pointer-events:none;position:absolute;top:0px;left:0px;"
+--                                       ++ bool unselstyle selstyle b)
+--           where unselstyle = "border: 1px solid black;"
+--                 selstyle   = "border: 1px solid black; box-shadow: 0px 0px 10px white;"
+
+
+-- imageSpaceToWidgetSpace :: Model a -> (Double,Double) -> (Double,Double)
+-- imageSpaceToWidgetSpace m (x,y) =
+--   let (widNat, heiNat)   = bimap fI fI $ _mNatSize m
+--       (widGeom,heiGeom)  = bimap fI fI $ _mGeom m
+--       zm                 = _mZoom m
+--       scaleCoeff         = widGeom / widNat * _mZoom m
+--       (focusX,focusY)    = _mFocus m
+--       (xOff,yOff) = (focusX - widNat / 2, focusY - heiNat/2)
+--       (x',y') = (x * widGeom / widNat * zm - xOff,
+--                  y * heiGeom / heiNat * zm - yOff)
+--   in  (x',y')
+
+
+-- widgetSpaceToImageSpace :: Model a -> (Double,Double) -> (Double,Double)
+-- widgetSpaceToImageSpace m (x',y') =
+--   let (widNat, heiNat) = bimap fI fI $ _mNatSize m
+--       (widGeom, heiGeom) = bimap fI fI $ _mGeom m
+--       zm                 = _mZoom m
+--       (focusX,focusY)    = _mFocus m
+--       (xOff,yOff) = (focusX - widNat / 2, focusY - heiNat/2)
+--       -- We'll just invert imageSpaceToWidgetSpace
+--   in  ((x'+xOff)*widNat/widGeom/zm,
+--        (y'+yOff)*heiNat/heiGeom/zm)

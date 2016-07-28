@@ -47,7 +47,8 @@ module ScaledImage (
   getHeight,
   getBoundingClientRect,
   divImgSpace',
-  divImgSpace
+  divImgSpace,
+  wheelEvents
 )where
 
 import           Control.Monad            (liftM2)
@@ -117,12 +118,12 @@ data ScaledImage t = ScaledImage
   , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
   , widgetToScreenSpace :: Dynamic t ((Double,Double) -> (Double, Double))
-  , imageSpaceClick     :: Event t (Double, Double)
-  , imageSpaceMousemove :: Event t (Double, Double)
-  , imageSpaceMousedown :: Event t (Double, Double)
-  , imageSpaceMouseup   :: Event t (Double, Double)
-  , imageSpaceDblClick  :: Event t (Double, Double)
-  , imageSpaceWheel     :: Event t (Double, (Double,Double))
+  -- , imageSpaceClick     :: Event t (Double, Double)
+  -- , imageSpaceMousemove :: Event t (Double, Double)
+  -- , imageSpaceMousedown :: Event t (Double, Double)
+  -- , imageSpaceMouseup   :: Event t (Double, Double)
+  -- , imageSpaceDblClick  :: Event t (Double, Double)
+  -- , imageSpaceWheel     :: Event t (Double, (Double,Double))
   }
 
 -- TODO: This kind of pattern seems to come up a lot. I began trying to generalize it here,
@@ -186,27 +187,7 @@ scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle tran
     screenSpace <- mkScreenSpace `mapDyn` scale `apDyn` shiftScreenPix
     return (img, imgSpace, screenSpace)
 
-  clicks <- relativizeEvent (_el_element img) imgSpace E.click     shiftScreenPix
-  moves  <- relativizeEvent (_el_element img) imgSpace E.mouseMove shiftScreenPix
-  downs  <- relativizeEvent (_el_element img) imgSpace E.mouseDown shiftScreenPix
-  ups    <- relativizeEvent (_el_element img) imgSpace E.mouseUp   shiftScreenPix
-  dbls   <- relativizeEvent (_el_element img) imgSpace E.dblClick  shiftScreenPix
-  -- TODO try to fit this and relativizeEvent into one function
-  wheels <- do
-    i <- combineDyn (,) imgSpace shiftScreenPix
-    evs <- wrapDomEvent (_el_element img) (`on` E.wheel) $ do
-      ev   <- event
-      delY <- getDeltaY ev
-      Just br <- getBoundingClientRect (_el_element img)
-      xOff <- fmap (r2 . negate) (getLeft br)
-      yOff <- fmap (r2 . negate) (getTop  br)
-      cX   <- getClientX ev
-      cY   <- getClientY ev
-      return (delY, (fI cX + xOff, fI cY + yOff ))
-    return $ attachWith (\(f,(dx,dy)) (w,(x,y)) -> (w, f (x + dx,y + dy))) (current i) evs
-
   return $ ScaledImage htmlImg parentDiv img naturalSize imgSpace screenSpace
-    clicks moves downs ups dbls wheels
 
   where
     mkTopLevelAttrs (naturalWid, naturalHei) topAttrs topScale =
@@ -363,3 +344,16 @@ apDyn :: MonadWidget t m => m (Dynamic t (a -> b)) -> Dynamic t a -> m (Dynamic 
 apDyn mf a = do
   f <- mf
   combineDyn ($) f a
+
+
+wheelEvents x = do
+  wrapDomEvent (_el_element x) (`on` E.wheel) $ do
+    ev <- event
+    delY <- getDeltaY ev
+    Just br <- getBoundingClientRect (_el_element x)
+    xOff <- fmap (r2 . negate) (getLeft br)
+    yOff <- fmap (r2 . negate) (getTop  br)
+    cX   <- getClientX ev
+    cY   <- getClientY ev
+    return (delY, (fI cX + xOff, fI cY + yOff ))
+

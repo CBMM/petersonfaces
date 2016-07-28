@@ -39,45 +39,45 @@ run' = do
     return ()
   return ()
 
-run :: forall t m.MonadWidget t m => m ()
-run = mdo
-  content <- fmap fst $ elAttr' "div" ("class" =: "content") $ do
-    imgSrc <- stringInput "img  src" "http://cbmm.github.io/images/GitHub.png"
+-- run :: forall t m.MonadWidget t m => m ()
+-- run = mdo
+--   content <- fmap fst $ elAttr' "div" ("class" =: "content") $ do
+--     imgSrc <- stringInput "img  src" "http://cbmm.github.io/images/GitHub.png"
 
-    scaleInp <- readInput "scale" (Just 1)
-    scale <- foldDyn ($) 1 $ leftmost [fmap const (fmapMaybe id $ updated scaleInp)
-                                      ,wheelScale]
-    bounding <- fmap updated $ readInput "Bounding" (Just $ BoundingBox (Coord 0 0) (Coord 10 10))
+--     scaleInp <- readInput "scale" (Just 1)
+--     scale <- foldDyn ($) 1 $ leftmost [fmap const (fmapMaybe id $ updated scaleInp)
+--                                       ,wheelScale]
+--     bounding <- fmap updated $ readInput "Bounding" (Just $ BoundingBox (Coord 0 0) (Coord 10 10))
 
-    offset :: Dynamic t (Maybe (Double,Double)) <- liftA2 (,)
-      `mapWidget` readInput "x offset" (Just 0)
-      `apWidget`  readInput "y offset" (Just 0)
+--     offset :: Dynamic t (Maybe (Double,Double)) <- liftA2 (,)
+--       `mapWidget` readInput "x offset" (Just 0)
+--       `apWidget`  readInput "y offset" (Just 0)
 
-    si <- scaledImage def
-          { sicInitialSource = "http://cbmm.github.io/images/GitHub.png"
-          , sicSetSource = fmapMaybe id $ updated imgSrc
-          , sicSetScale  = updated scale
-          , sicTopLevelAttributes = constDyn ("style" =: "width:200px;")
-          , sicSetOffset = fmapMaybe id $ updated offset
-          , sicInitialBounding = Nothing
-          , sicSetBounding = bounding
-          , sicImgStyle  = constDyn "box-shadow: 10px 10px 10px black;"
-          }
-    -- let clks :: Event t (Int,Int) = domEvent Mousedown (siEl si)
-    --     clkInfo = attachWith ($) (current $ siNaturalCoords si) clks
-    el "br" (return ())
-    dynText =<< holdDyn "No clicks" (fmap show $ leftmost [imageSpaceClick si, imageSpaceMousemove si
-                                                          ,imageSpaceMousedown si, imageSpaceMouseup si])
-    el "hr" (return ())
-    p <- readInput "Test imgSpace" (Just (0,0))
-    dynText =<< combineDyn (\f p -> show $ fmap f p) (screenToImageSpace si) p
-    return ()
+--     si <- scaledImage def
+--           { sicInitialSource = "http://cbmm.github.io/images/GitHub.png"
+--           , sicSetSource = fmapMaybe id $ updated imgSrc
+--           , sicSetScale  = updated scale
+--           , sicTopLevelAttributes = constDyn ("style" =: "width:200px;")
+--           , sicSetOffset = fmapMaybe id $ updated offset
+--           , sicInitialBounding = Nothing
+--           , sicSetBounding = bounding
+--           , sicImgStyle  = constDyn "box-shadow: 10px 10px 10px black;"
+--           }
+--     -- let clks :: Event t (Int,Int) = domEvent Mousedown (siEl si)
+--     --     clkInfo = attachWith ($) (current $ siNaturalCoords si) clks
+--     el "br" (return ())
+--     dynText =<< holdDyn "No clicks" (fmap show $ leftmost [imageSpaceClick si, imageSpaceMousemove si
+--                                                           ,imageSpaceMousedown si, imageSpaceMouseup si])
+--     el "hr" (return ())
+--     p <- readInput "Test imgSpace" (Just (0,0))
+--     dynText =<< combineDyn (\f p -> show $ fmap f p) (screenToImageSpace si) p
+--     return ()
 
-  cWheeled :: Event t Double <- wrapDomEvent (_el_element content) (`on` E.wheel) (mousewheelHandler)
-  let wheelScale = ffor cWheeled $ \n -> bool (* 0.9) (* 1.1) (n > 0)
+--   cWheeled :: Event t Double <- wrapDomEvent (_el_element content) (`on` E.wheel) (mousewheelHandler)
+--   let wheelScale = ffor cWheeled $ \n -> bool (* 0.9) (* 1.1) (n > 0)
 
-  sInfo <- dynText =<< holdDyn "Awaiting scroll" (fmap show $ cWheeled)
-  return ()
+--   sInfo <- dynText =<< holdDyn "Awaiting scroll" (fmap show $ cWheeled)
+--   return ()
 
 
 
