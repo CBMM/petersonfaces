@@ -23,12 +23,17 @@ import Reflex
 import Reflex.Dom
 import ScaledImage
 import Thumbnail
+import SubPicSelect
 
 main :: IO ()
-main = mainWidget run'
+main = mainWidget run'''
 
 testimg = "http://web.mit.edu/greghale/Public/frog-1.jpg"
 
+run''' :: forall t m.MonadWidget t m => m ()
+run''' = do
+  subPicSelect (def { spsc_imgSrc = testimg} ::  SubPicSelectConfig t)
+  return ()
 
 
 run' :: MonadWidget t m => m ()

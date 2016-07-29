@@ -120,25 +120,11 @@ data ScaledImage t = ScaledImage
   , widgetToScreenSpace :: Dynamic t ((Double,Double) -> (Double, Double))
   }
 
--- TODO: This kind of pattern seems to come up a lot. I began trying to generalize it here,
---       but want to make sure it works like this at all the potential use sites before finishing
---       and plugging it in
--- sizedWidget :: MonadWidget t m
---             => (Dynamic t (Map String String) -> m a)
---             -> Event t (Double, Double)
---             -> m (Dynamic t (Double, Double), a)
--- sizedWidget ma setSize = do
---   (resizeEvents, a) <- ma =<< (forDyn 
-
---   size <- holdDyn (1,1) =<< performEvent (ffor (leftmost [pb, fmap Just setSize, ])))
---   holdDyn (1,1) =<< (
-
 -- | A widget supporting clipping, zooming, and translation of a source image.
 --   Composed of
 --     - a parent div fixed to the size of the source image,
 --     - a cropping div
 --     - the source image
-
 scaledImage :: MonadWidget t m => ScaledImageConfig t -> m (ScaledImage t)
 scaledImage (ScaledImageConfig img0 dImg topScale topAttrs cropAttrs iStyle trans0 dTrans
              scale0 dScale bounding0 dBounding) = mdo

@@ -310,8 +310,8 @@ faceWidget mouseMoves dragEnds imgToWidg widgToImg natSize zoom focus selKey top
         fmap Just (relativeFeatures s f z)
       faceUpdates = leftmost [defFeatures, faceDeletions]
 
-  facePartEvents <- listWithKeyShallowDiff mempty faceUpdates (faceFeatureWidget mouseMoves dragEnds imgToWidg widgToImg rect)
-  faceParts :: Dynamic t (Map Int FaceFeature) <- joinDynThroughMap <$> mapDyn (fmap fst) facePartEvents
+  facePartEvents <-listWithKeyShallowDiff mempty faceUpdates (faceFeatureWidget mouseMoves dragEnds imgToWidg widgToImg rect)
+  faceParts :: Dynamic t (Map Int FaceFeature) <- fmap (traceDyn "FACEPARTS") $ joinDynThroughMap <$> mapDyn (fmap fst) facePartEvents
 
   faceDeletions <- fmap ((fmap . fmap) (const Nothing) . switchPromptlyDyn) $
     mapDyn (mergeMap . fmap snd) facePartEvents
