@@ -259,8 +259,8 @@ divImgSpace' toWidgetSpace bounding attrs children = do
           top  = "top: "    ++ show y0  ++ "px;"
           wid  = "width: "  ++ show w ++ "px;"
           hei  = "height: " ++ show h ++ "px;"
-          thisStyle = "position: relative; " ++ mconcat [left, top, wid, hei]
-          style' = thisStyle ++ fromMaybe "" (Map.lookup "sytle" ats)
+          thisStyle = "position: absolute; " ++ mconcat [left, top, wid, hei]
+          style' = thisStyle ++ fromMaybe "" (Map.lookup "style" ats)
       in (Map.insert "style" style' ats) -- , "style" =: thisStyle)
     ) widgetPos attrs
   elDynAttr' "div" attrs' children

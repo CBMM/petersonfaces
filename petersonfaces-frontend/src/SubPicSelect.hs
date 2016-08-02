@@ -95,8 +95,21 @@ subPicSelect SubPicSelectConfig{..} = do
              , Nothing <$ domEvent Mouseleave (siEl img)
              ]
   bb <- mkBounding `mapDyn` aspect `apDyn` siNaturalSize img `apDyn` frac `apDyn` pos
-  bb <- holdDyn (BoundingBox (Coord 1 1) (Coord 10 10)) (fmapMaybe id (updated bb))
-  divImgSpace (widgetToScreenSpace img) bb (constDyn $ "style" =: "border: 1px solid black;") (return ())
+  bbVis <- holdDyn (BoundingBox (Coord 1 1) (Coord 10 10)) (fmapMaybe id (updated bb))
+
+  let surroundAttrs = "class" =: "surround-mask" <> "style" =: "background-color: rgba(0,0,0,0.25); pointer-events: none;"
+  surroundBBs <- combineDyn (\(wid',hei') bs -> case bs of
+                                Nothing -> []
+                                Just (BoundingBox (Coord x0 y0) (Coord x1 y1)) ->
+                                  let (wid,hei) = (fI wid', fI hei') in
+                                  [ BoundingBox (Coord 0 0) (Coord wid y0)
+                                  , BoundingBox (Coord 0 y0) (Coord x0 y1), BoundingBox (Coord x1 y0) (Coord wid y1)
+                                  , BoundingBox (Coord 0 y1) (Coord wid hei)]) (siNaturalSize img) bb
+  dyn =<< (forDyn bb $ \case
+    Nothing -> return ()
+    Just bb' -> divImgSpace (widgetToScreenSpace img) (constDyn bb') (constDyn $ "class" =: "select-roi"
+                                            <> "style" =: "pointer-events: none; border: 0px solid black; box-shadow: 0px 0px 10px rgba(0,0,0,0.5);") (return ()))
+  simpleList surroundBBs (\sbb -> divImgSpace (widgetToScreenSpace img) sbb (constDyn surroundAttrs) (return ()))
   return undefined
 
 
