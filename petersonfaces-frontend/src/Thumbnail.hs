@@ -224,7 +224,7 @@ thumbnail (ThumbnailConfig srcImg attrs) mkChild = mdo
     let newChild = ffor addSel $ \(AddSubPic k cfg) -> k =: Just cfg
     subPics <- listWithKeyShallowDiff
       mempty newChild (mkChild mousemoves dragEnds (screenToImageSpace bigPic)
-                       (widgetToScreenSpace bigPic)
+                       (imageToScreenSpace bigPic)
                        natSize zoom focus selKey topScale)
 
     thumbScale <- mapDyn (/4) outerScale
@@ -278,6 +278,8 @@ type FaceUpdate = Map Int (Maybe FaceFeature)
 data Face = Face { faceFeatures ::  Map Int FaceFeature }
 
 
+-- TODO Use the one in FaceFeatures.hs if anything
+--      Maybe difficult since faceWidget here doesn't handle its own events.
 faceWidget :: forall t m.MonadWidget t m
            -- => Dynamic t (Int,Int)
            => Event t (Double,Double)
@@ -367,10 +369,6 @@ faceFeatureWidget externalMoves externalEnds toImg fmImg bounding k f0 dF = mdo
   let starts = fmap (bimap fI fI) (domEvent Mousedown ffDiv)
       ends   = leftmost [externalEnds, () <$ domEvent Mouseup ffDiv]
       moves  = leftmost [fmap (bimap fI fI) (domEvent Mousemove ffDiv), externalMoves]
-
-  -- performEvent (fmap (liftIO . print . ("START: " ++) . show) starts)
-  -- performEvent (fmap (liftIO . print . ("MOVE: " ++)  . show) moves)
-  -- performEvent (fmap (liftIO . print . ("END: " ++)   . show) ends)
 
   draggingOrigin :: Dynamic t (Maybe (FaceFeature, (Double,Double))) <- holdDyn Nothing $ leftmost
     [ fmap Just (attach (current ff) (imgSpace starts))

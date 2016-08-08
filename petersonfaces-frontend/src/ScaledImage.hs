@@ -117,7 +117,7 @@ data ScaledImage t = ScaledImage
   , siImgEl             :: El t
   , siNaturalSize       :: Dynamic t (Int,Int)
   , screenToImageSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
-  , widgetToScreenSpace :: Dynamic t ((Double,Double) -> (Double, Double))
+  , imageToScreenSpace  :: Dynamic t ((Double,Double) -> (Double, Double))
   }
 
 -- | A widget supporting clipping, zooming, and translation of a source image.
@@ -253,7 +253,7 @@ divImgSpace' toWidgetSpace bounding attrs children = do
               in  ((x0,y0), (x1-x0, y1-y0))
     ) toWidgetSpace bounding
 
-  attrs' <- traceDyn "trace" <$> combineDyn
+  attrs' <- combineDyn
     (\((x0,y0), (w,h)) ats ->
       let left = "left: "   ++ show x0  ++ "px;"
           top  = "top: "    ++ show y0  ++ "px;"
