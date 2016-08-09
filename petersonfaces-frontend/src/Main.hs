@@ -32,7 +32,9 @@ testimg = "http://web.mit.edu/greghale/Public/frog-1.jpg"
 
 run''' :: forall t m.MonadWidget t m => m ()
 run''' = do
-  subPicSelect (def { spsc_imgSrc = testimg} ::  SubPicSelectConfig t)
+  w <- subPicSelect (def { spsc_imgSrc = testimg} ::  SubPicSelectConfig t)
+  dyn =<< forDyn (sps_selection w) (\bb -> faceWidget bb (sps_img w) testimg)
+  display (sps_boxes w)
   return ()
 
 

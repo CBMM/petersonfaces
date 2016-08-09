@@ -37,22 +37,7 @@ import           Data.Monoid              ((<>))
 import qualified Data.Text                as T
 import           Reflex.Dom               hiding (restore)
 import           GHCJS.DOM.EventM         (EventM)
-#ifdef ghcjs_HOST_OS
-import GHCJS.DOM.HTMLCanvasElement        (getContext, castToHTMLCanvasElement)
-import GHCJS.DOM.CanvasRenderingContext2D (CanvasRenderingContext2D, save, restore, getImageData)
-import           GHCJS.DOM.Types          (ImageData, Nullable, nullableToMaybe)
-import           GHCJS.Marshal            (fromJSValUnchecked, toJSVal)
-import           GHCJS.DOM.Element        (getClientTop, getClientLeft)
-import           GHCJS.DOM.ClientRect     (getTop, getLeft)
-#endif
-import           GHCJS.DOM.Types          (IsGObject, HTMLCanvasElement, HTMLImageElement)
-import           GHCJS.DOM.CanvasRenderingContext2D as Context2D
-import qualified GHCJS.DOM.HTMLImageElement as ImageElement
 import           GHCJS.DOM.EventM         (on, event, stopPropagation, preventDefault)
-import qualified GHCJS.DOM.ClientRect     as CR
-import           GHCJS.DOM.Element        (getClientTop, getClientLeft)
-import           GHCJS.DOM.MouseEvent     (getClientX, getClientY)
-import qualified GHCJS.DOM.Types          as T
 import           GHCJS.DOM.WheelEvent     as WheelEvent
 import qualified GHCJS.DOM.Element        as E
 
@@ -76,6 +61,8 @@ instance Reflex t => Default (SubPicSelectConfig t) where
 
 data SubPicSelect t = SubPicSelect
   { sps_boxes :: Dynamic t (Map Int BoundingBox)
+  , sps_selection :: Dynamic t (Maybe BoundingBox)
+  , sps_img   :: ScaledImage t
   }
 
 
@@ -109,8 +96,8 @@ subPicSelect SubPicSelectConfig{..} = do
 
   -- highlight <- holdDyn Nothing never
 
-  let getBox' :: Maybe Int -> Map Int (FaceAttributes t) -> Maybe BoundingBox
-      getBox' i m = i >>= fmap faBounding . flip Map.lookup m
+  let getBox' :: Maybe Int -> Map Int BoundingBox -> Maybe BoundingBox
+      getBox' i m = i >>= flip Map.lookup m
 
   selectionBox :: Dynamic t (Maybe BoundingBox) <- combineDyn getBox' selection allBoxes
   -- highlightBox :: Dynamic t (Maybe BoundingBox) <- combineDyn getBox' highlight allBoxes
@@ -135,7 +122,7 @@ subPicSelect SubPicSelectConfig{..} = do
                                      "box-shadow: 0px 0px 10px rgba(0,0,0,0.5);")) (return ()))
   simpleList surroundBBs (\sbb -> divImgSpace (imageToScreenSpace img) sbb (constDyn surroundAttrs) (return ()))
   display selection
-  return (SubPicSelect $ constDyn mempty)
+  return (SubPicSelect allBoxes selectionBox img)
 
 
 selectionMarker :: forall t m. MonadWidget t m
@@ -145,7 +132,8 @@ selectionMarker :: forall t m. MonadWidget t m
                 -> Int
                 -> BoundingBox
                 -> Event t BoundingBox
-                -> m ((FaceAttributes t), Event t DeselectMe, Event t DeleteMe, Event t SelectMe)
+                -> m (BoundingBox, Event t DeselectMe, Event t DeleteMe, Event t SelectMe)
+                -- -> m ((FaceAttributes t), Event t DeselectMe, Event t DeleteMe, Event t SelectMe)
 selectionMarker toScreen sel hil k bb _ = do
   isSelected <- mapDyn (== Just k) sel -- TODO demux
   divAttrs   <- forDyn isSelected $ bool ("style" =: "opacity: 0.5; border: 1px solid black; pointer-events: none;")
@@ -161,7 +149,8 @@ selectionMarker toScreen sel hil k bb _ = do
     return (domEvent Click togl, DeleteMe <$ domEvent Click del)
   let deselects = DeselectMe <$ gate (current isSelected) toggleSel
       selects   = SelectMe   <$ gate (fmap not $ current isSelected) toggleSel
-  return ((FaceAttributes bb (constDyn mempty)), deselects, del, selects)
+  return (bb, deselects, del, selects)
+  -- return ((FaceAttributes bb (constDyn mempty)), deselects, del, selects)
 
 
 
@@ -191,39 +180,3 @@ mkBounding selectionAspect natGeom scaleFactor (Just f) = Just $
       (x,y)     = boundFocusCoord  selectionAspect natGeom scaleFactor f
   in  BoundingBox (Coord (x - wid/2) (y - hei/2))
                   (Coord (x + wid/2) (y + hei/2))
-
--- selectionZoomLimits :: AspectRatio -> Zoom -> (Int,Int) -> (Double,Double)
--- selectionZoomLimits topScale selectionAspect imgGeom(imgWid,imgHei) =
---   let minZoomPix = 3
---       minZoomWid = topScale * max selectionAspect (1/selectionAspect)
---       natAspect  = fI imgWid / fI imgHei
---       maxZoom    = bool 
-
-#ifndef ghcjs_HOST_OS
-fromJSValUnchecked = error ""
-toJSVal = error ""
-
-
-getContext :: MonadIO m => HTMLCanvasElement -> String -> m CanvasRenderingContext2D
-getContext = error "getContext only available in ghcjs"
-
-getImageData :: CanvasRenderingContext2D -> Float -> Float -> Float -> Float -> IO (Maybe ImageData)
-getImageData = error "getImageData only available in ghcjs"
-
-castToHTMLCanvasElement :: IsGObject obj => obj -> HTMLCanvasElement
-castToHTMLCanvasElement = error "castToHTMLCanvasElement only available in ghcjs"
-
-save :: MonadIO m => CanvasRenderingContext2D -> m ()
-save = error "save only available in ghcjs"
-
-restore :: MonadIO m => CanvasRenderingContext2D -> m ()
-restore = error "restore only available in ghcjs"
-
-getTop :: MonadIO m => ClientRect -> m Float
-getTop = error "getTop only available in ghcjs"
-
-getLeft :: MonadIO m => ClientRect -> m Float
-getLeft = error "getLeft only available in ghcjs"
-
-#endif
-
