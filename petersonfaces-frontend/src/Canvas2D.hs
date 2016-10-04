@@ -13,9 +13,12 @@ Note: It's completely untested and unused.
 -}
 
 {-# language CPP #-}
+{-# language FlexibleContexts #-}
+{-# language GADTs #-}
 {-# language RecursiveDo #-}
 {-# language KindSignatures #-}
 {-# language RankNTypes #-}
+{-# language OverloadedStrings #-}
 {-# language TypeFamilies #-}
 
 module Canvas2D where
@@ -24,6 +27,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Monoid ((<>))
+import qualified Data.Text as T
 import Reflex.Dom hiding (restore)
 #ifdef ghcjs_HOST_OS
 import GHCJS.DOM.HTMLCanvasElement (getContext, castToHTMLCanvasElement)
@@ -37,7 +41,7 @@ import GHCJS.DOM.ImageData
 
 
 data CanvasConfig t = CanvasConfig
-  { canvasConfig_attributes         :: Dynamic t (Map String String)
+  { canvasConfig_attributes         :: Dynamic t (Map T.Text T.Text)
   , canvasConfig_localContextAction :: Event t (CanvasRenderingContext2D -> IO ())
   , canvasConfig_initialContext     :: CanvasRenderingContext2D
   , canvasConfig_modifyContext      :: Event t (CanvasRenderingContext2D -> IO ())
@@ -54,18 +58,18 @@ canvas :: forall t m.MonadWidget t m => CanvasConfig t -> m (Canvas t m)
 canvas (CanvasConfig attrs localCtx ctx0 touchCtx) = do
 
   (canvasEl, children) <- elDynAttr' "canvas" attrs (return ())
-  let canv = castToHTMLCanvasElement $ _el_element canvasEl
+  let canv = castToHTMLCanvasElement $ _element_raw canvasEl
 
   rec ctx <- holdDyn ctx0 touchedCtx
 
       touchedCtx <- performEvent $ ffor (attach (current ctx) touchCtx) $ \(c,mkCtx) -> liftIO $ do
-        cOld <- getContext canv "2d"
+        cOld <- getContext canv ("2d" :: String)
         mkCtx =<< fromJSValUnchecked cOld :: IO ()
-        fromJSValUnchecked =<< getContext canv "2d"
+        fromJSValUnchecked =<< getContext canv ("2d" :: String)
 
   performEvent $ ffor (attach (current ctx) localCtx) $ \(c,act) -> liftIO $ do
     save c
-    getContext canv "2d" >>= \jv -> fromJSValUnchecked jv >>= act
+    getContext canv ("2d" :: String) >>= \jv -> fromJSValUnchecked jv >>= act
     restore c
 
   let getCtx triggers = performEvent $ ffor (attach (current ctx) triggers) $ \(c, (x,y,w,h)) -> liftIO $ do

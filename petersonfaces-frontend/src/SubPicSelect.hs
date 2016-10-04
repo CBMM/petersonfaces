@@ -9,6 +9,7 @@ Portability: GHCJS
 -}
 
 {-# language CPP #-}
+{-# language FlexibleContexts #-}
 {-# language RecursiveDo #-}
 {-# language RecordWildCards #-}
 {-# language KindSignatures #-}
@@ -46,7 +47,7 @@ import ScaledImage
 import FaceFeatures
 
 data SubPicSelectConfig t = SubPicSelectConfig
-  { spsc_imgSrc           :: String
+  { spsc_imgSrc           :: T.Text
   , spsc_width            :: Int
   , spsc_initialAspect    :: Double
   , spsc_setAspect        :: Event t Double
@@ -61,7 +62,7 @@ instance Reflex t => Default (SubPicSelectConfig t) where
 
 data SubPicSelect t = SubPicSelect
   { sps_boxes :: Dynamic t (Map Int BoundingBox)
-  , sps_selection :: Dynamic t (Maybe BoundingBox)
+  , sps_selection :: Dynamic t (Maybe (Int,BoundingBox))
   , sps_img   :: ScaledImage t
   }
 
@@ -72,10 +73,10 @@ subPicSelect SubPicSelectConfig{..} = do
                              , sicTopLevelScale   = topScale
                              , sicInitialBounding = Nothing
                              }
-      topScale <- forDyn (siNaturalSize img) $ \(natWid,_) ->
-        fI spsc_width / fI natWid
+      let topScale = ffor (siNaturalSize img) $ \(natWid,_) ->
+            fI spsc_width / fI natWid
 
-      wheels <- fmap (/200) <$> wrapDomEvent (_el_element (siEl img))
+      wheels <- fmap (/200) <$> wrapDomEvent (_element_raw (siEl img))
         (`on` E.wheel) (event >>= getDeltaY)
 
       aspect <- holdDyn spsc_initialAspect spsc_setAspect
@@ -85,13 +86,13 @@ subPicSelect SubPicSelectConfig{..} = do
                  , Nothing <$ domEvent Mouseleave (siEl img)
                  ]
 
-      bb  <- mkBounding `mapDyn` aspect `apDyn` siNaturalSize img `apDyn` frac `apDyn` pos
-      bb' <- combineDyn (\b s -> bool Nothing b (s == Nothing)) bb selection
+      let bb = mkBounding <$> aspect <*> siNaturalSize img <*> frac <*> pos
+          bb' = zipDynWith (\b s -> bool Nothing b (s == Nothing)) bb selection
       display bb'
       (allBoxes, selection) <- listSelfDeleting mempty (boxInserts) spsc_setSelection
         (selectionMarker (imageToScreenSpace img) selection (constDyn Nothing {- TODO:  from highlight, drop -}))
       --bbVis <- holdDyn (BoundingBox (Coord 1 1) (Coord 10 10)) (fmapMaybe id (updated bb))
-      let boxInserts = fmapMaybe id $ tagDyn bb (domEvent Dblclick $ siEl img)
+      let boxInserts = fmapMaybe id $ tagPromptlyDyn bb (domEvent Dblclick $ siEl img)
 
 
   -- highlight <- holdDyn Nothing never
@@ -99,12 +100,11 @@ subPicSelect SubPicSelectConfig{..} = do
   let getBox' :: Maybe Int -> Map Int BoundingBox -> Maybe BoundingBox
       getBox' i m = i >>= flip Map.lookup m
 
-  selectionBox :: Dynamic t (Maybe BoundingBox) <- combineDyn getBox' selection allBoxes
-  -- highlightBox :: Dynamic t (Maybe BoundingBox) <- combineDyn getBox' highlight allBoxes
+      selectionBox :: Dynamic t (Maybe BoundingBox) = zipDynWith getBox' selection allBoxes
 
   let surroundAttrs = "class" =: "surround-mask" <>
             "style" =: "background-color: rgba(0,0,0,0.10); pointer-events: none;"
-  surroundBBs <- (\(wid',hei') searchBB selBB hlBB ->
+      surroundBBs = (\(wid',hei') searchBB selBB hlBB ->
                        let innerBB = foldl' (<|>) Nothing [selBB, hlBB, searchBB]
                        in case innerBB of
                          Nothing -> [BoundingBox (Coord 0 0) (Coord (fI wid') (fI hei'))]
@@ -113,8 +113,8 @@ subPicSelect SubPicSelectConfig{..} = do
                            [ BoundingBox (Coord 0 0) (Coord wid y0)
                            , BoundingBox (Coord 0 y0) (Coord x0 y1), BoundingBox (Coord x1 y0) (Coord wid y1)
                            , BoundingBox (Coord 0 y1) (Coord wid hei)])
-        `mapDyn` (siNaturalSize img) `apDyn` bb `apDyn` selectionBox `apDyn` constDyn Nothing -- TODO: last arg from highlightBox. drop it
-  dyn =<< (forDyn bb $ \case
+        <$> (siNaturalSize img) <*> bb <*> selectionBox <*> constDyn Nothing -- TODO: last arg from highlightBox. drop it
+  dyn (ffor bb $ \case
     Nothing -> return ()
     Just bb' -> divImgSpace (imageToScreenSpace img)
       (constDyn bb') (constDyn $ "class" =: "select-roi"
@@ -122,7 +122,7 @@ subPicSelect SubPicSelectConfig{..} = do
                                      "box-shadow: 0px 0px 10px rgba(0,0,0,0.5);")) (return ()))
   simpleList surroundBBs (\sbb -> divImgSpace (imageToScreenSpace img) sbb (constDyn surroundAttrs) (return ()))
   display selection
-  return (SubPicSelect allBoxes selectionBox img)
+  return (SubPicSelect allBoxes (liftA2 (,) <$> selection <*> selectionBox) img)
 
 
 selectionMarker :: forall t m. MonadWidget t m
@@ -133,10 +133,9 @@ selectionMarker :: forall t m. MonadWidget t m
                 -> BoundingBox
                 -> Event t BoundingBox
                 -> m (BoundingBox, Event t DeselectMe, Event t DeleteMe, Event t SelectMe)
-                -- -> m ((FaceAttributes t), Event t DeselectMe, Event t DeleteMe, Event t SelectMe)
 selectionMarker toScreen sel hil k bb _ = do
-  isSelected <- mapDyn (== Just k) sel -- TODO demux
-  divAttrs   <- forDyn isSelected $ bool ("style" =: "opacity: 0.5; border: 1px solid black; pointer-events: none;")
+  let isSelected = (== Just k) <$> sel -- TODO demux
+  let divAttrs = ffor isSelected $ bool ("style" =: "opacity: 0.5; border: 1px solid black; pointer-events: none;")
                                          ("style" =: "opacity: 1;   border: 1px solid black; pointer-events: none;")
   (d,(toggleSel, del)) <- divImgSpace' toScreen (constDyn bb) divAttrs $ do
     togl <- fst <$> elAttr' "div" ("class" =: "ok-button" <>

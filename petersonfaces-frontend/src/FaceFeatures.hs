@@ -9,16 +9,17 @@ Portability: GHCJS
 -}
 
 {-# language CPP #-}
-{-# language RecursiveDo #-}
-{-# language RecordWildCards #-}
+{-# language FlexibleContexts #-}
 {-# language KindSignatures #-}
 {-# language LambdaCase #-}
-{-# language RankNTypes #-}
-{-# language TypeFamilies #-}
 {-# language OverloadedStrings #-}
+{-# language RankNTypes #-}
+{-# language RecursiveDo #-}
+{-# language RecordWildCards #-}
+{-# language ScopedTypeVariables #-}
+{-# language TypeFamilies #-}
 {-# language TemplateHaskell #-}
 {-# language TupleSections #-}
-{-# language ScopedTypeVariables #-}
 
 
 module FaceFeatures where
@@ -49,14 +50,14 @@ data FaceAttributes t = FaceAttributes {
 instance Show (FaceAttributes t) where
   show (FaceAttributes bb fs) = "FaceAttributes " <> show bb <> " <<Dynamic t (Map Int FaceFeature)>>"
 
-type FaceFeature = (String, (Double,Double))
+type FaceFeature = (T.Text, (Double,Double))
 type FaceUpdate = Map Int (Maybe FaceFeature)
 
 
-faceWidget :: forall t m.MonadWidget t m => BoundingBox -> ScaledImage t -> String -> m (FaceAttributes t)
+faceWidget :: forall t m.MonadWidget t m => BoundingBox -> ScaledImage t -> T.Text -> m (FaceAttributes t)
 faceWidget bb@(BoundingBox (Coord bX0 bY0) (Coord bX1 bY1)) outsideImg imgSrc = mdo
   pb <- getPostBuild
-  topScale <- mapDyn ((200 /) . fI . fst) (siNaturalSize outsideImg)
+  let topScale = ((200 /) . fI . fst) <$> siNaturalSize outsideImg
   img <- scaledImage def { sicInitialSource = imgSrc
                          , sicTopLevelScale = topScale
                          }
@@ -95,24 +96,24 @@ faceFeatureWidget bb img k f0 dF = mdo
   ff :: Dynamic t FaceFeature <- holdDyn f0 dF -- $ fUpdates -- leftmost [ traceEvent "dF" dF, fUpdates ]
 
   let (divWid,divHei) :: (Double,Double) = (20,20)
-  featureAttrs <- forDyn ff $ \(nm,(x,y)) ->
-    let (wX,wY) = (x,y)
-        xOff = "left: " <> T.pack (show (wX - divWid/2)) <> "px;"
-        yOff = "top: " <> T.pack (show (wY - divHei/2)) <> "px;"
-        wid  = "width: " <> T.pack (show divWid) <> "px;"
-        hei  = "height: " <> T.pack (show divHei) <> "px;"
+      featureAttrs = ffor ff $ \(nm,(x,y)) ->
+        let (wX,wY) = (x,y)
+            xOff = "left: " <> T.pack (show (wX - divWid/2)) <> "px;"
+            yOff = "top: " <> T.pack (show (wY - divHei/2)) <> "px;"
+            wid  = "width: " <> T.pack (show divWid) <> "px;"
+            hei  = "height: " <> T.pack (show divHei) <> "px;"
 
-        styl = "position: absolute; border: 1px solid rgba(0,0,0,0.5);"<>
-               " background-color: hsla(0,100%,100%,0.25); border-radius:200px;"
-    in  "style" =: T.unpack ( xOff <> yOff <> wid <> hei <> styl) <> "class" =: "face-feature"
+            styl = "position: absolute; border: 1px solid rgba(0,0,0,0.5);"<>
+                   " background-color: hsla(0,100%,100%,0.25); border-radius:200px;"
+        in  "style" =: ( xOff <> yOff <> wid <> hei <> styl) <> "class" =: "face-feature"
 
   -- The top-level div for the feature label
   (ffDiv, dels) <- elDynAttr' "div" featureAttrs $
    elAttr "div" ("class" =: "face-feature-container" <> "style" =: "position:absolute;") $ do
     elAttr "div" ("class" =: "face-feature-dot"
                  <> "style" =: ("position:absolute; top: " <>
-                                show (divHei/2 - 2) <> "px; left: " <>
-                                show (divWid/2 - 2) <> "px; width:4px; height:4px;" <>
+                                (T.pack . show) (divHei/2 - 2) <> "px; left: " <>
+                                (T.pack . show) (divWid/2 - 2) <> "px; width:4px; height:4px;" <>
                                 "background-color:black;border-radius:5px;")) (return ())
     closes <- elAttr "div" ("class" =: "face-feature-info" <> "style" =: "position: absolute; left: 20px;top:-20px;") $
       elAttr "div" ("class" =: "face-feature-delete" <> "style" =:
