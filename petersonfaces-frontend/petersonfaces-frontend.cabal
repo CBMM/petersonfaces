@@ -19,18 +19,23 @@ executable petersonfaces-frontend
   main-is:             Main.hs
   other-modules:       Canvas2D
                      , Common
+                     , Dropbox
+                     , FaceFeatures
                      , FacesWidget
                      , ScaledImage
                      , Thumbnail
                      , SubPicSelect
-                     , FaceFeatures
   build-depends:       base >=4.8 && <4.10
+                     , aeson >= 0.9 && < 1.1
+                     , bytestring
                      , containers >=0.5 && <0.6
                      , data-default, ghcjs-dom
                      , lens
                      , petersonfaces-common
                      , reflex
                      , reflex-dom
+                     , servant
+                     , servant-reflex
                      , text
                      , time
                      , transformers

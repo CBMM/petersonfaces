@@ -41,7 +41,8 @@ testimg = "http://web.mit.edu/greghale/Public/frog-1.jpg"
 run''' :: forall t m.MonadWidget t m => m ()
 run''' = do
   w <- subPicSelect (def { spsc_imgSrc = testimg} ::  SubPicSelectConfig t)
-  face :: Event t (Maybe (FaceAttributes t)) <- undefined -- dyn =<< forDyn (sps_selection w) (\mSelection -> facePreview mSelection (sps_img w) testimg)
+  face <- dyn =<< forDyn (sps_selection w) (\mSelection -> facePreview mSelection (sps_img w) testimg)
+  -- face :: Event t (Maybe (FaceAttributes t)) <- dyn $ ((\mSelection -> facePreview mSelection (sps_img w) testimg) <$> sps_selection w :: _)
   display (sps_boxes w)
   return ()
 

@@ -6,6 +6,7 @@ reflex-platform.ghcjs.override {
   overrides = self: super: { 
      reflex-dom-contrib   = (self.callPackage (reflex-platform.cabal2nixResult ../deps/reflex-dom-contrib) {});
      petersonfaces-common = (self.callPackage (reflex-platform.cabal2nixResult ../petersonfaces-common) {});
-     servant              = (self.callPackage (reflex-platform.cabal2nixResult ../deps/tagging/deps/servant-snap/deps/servant/servant) {});
+     # servant              = (self.callPackage (reflex-platform.cabal2nixResult ../deps/tagging/deps/servant-snap/deps/servant/servant) {});
+     servant-reflex       = (self.callPackage (reflex-platform.cabal2nixResult ../deps/servant-reflex) {});
   };
 }
