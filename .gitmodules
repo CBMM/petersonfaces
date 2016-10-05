@@ -1,6 +1,6 @@
 [submodule "deps/tagging"]
 	path = deps/tagging
-	url = https://bitbucket.com/imalsogreg/tagging
+	url = https://github.com/cbmm/tagging
 [submodule "deps/reflex-dom-contrib"]
 	path = deps/reflex-dom-contrib
 	url = https://github.com/reflex-frp/reflex-dom-contrib
