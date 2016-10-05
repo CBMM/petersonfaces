@@ -29,7 +29,7 @@ import GHCJS.DOM.WheelEvent
 import Reflex
 import Reflex.Dom
 import ScaledImage
-import Thumbnail hiding (faceWidget, FaceFeature)
+-- import Thumbnail hiding (faceWidget, FaceFeature)
 import SubPicSelect
 
 main :: IO ()

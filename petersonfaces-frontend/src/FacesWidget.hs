@@ -15,7 +15,7 @@ Portability: GHCJS
 {-# language CPP #-}
 {-# language FlexibleContexts #-}
 {-# language GADTs #-}
-
+{-# language DeriveGeneric #-}
 {-# language ScopedTypeVariables #-}
 {-# language OverloadedStrings #-}
 
@@ -29,6 +29,7 @@ import           Reflex
 import           Reflex.Dom
 import qualified Data.Map as Mapp
 import           Data.Map (Map)
+import           GHC.Generics
 import           GHCJS.DOM.EventM (on)
 #ifdef ghcjs_HOST_OS
 import           GHCJS.DOM.Element (getBoundingClientRect)
@@ -37,12 +38,19 @@ import           GHCJS.DOM.ClientRect (getTop, getLeft)
 import           GHCJS.DOM.HTMLElement
 -- import           GHCJS.DOM.MouseEvent (Mousemove)
 -------------------------------------------------------------------------------
-import           Face
 import           Canvas2D
 import           Thumbnail
 
 
 data PicUrl = PicUrl T.Text
+
+data FaceLoc = FaceLoc
+  { faceCenterX :: Double
+  , faceCenterY :: Double
+  , faceWidth   :: Double
+  , faceHeight  :: Double
+  } deriving (Eq, Ord, Show, Generic)
+
 
 -------------------------------------------------------------------------------
 data FacesWidgetConfig t = FacesWidgetConfig
@@ -92,4 +100,10 @@ facesWidget (FacesWidgetConfig attrs faces0 dFaces pic0 dPic sel) =
 
 #ifndef ghcjs_HOST_OS
 getBoundingClientRect = undefined
+getTop :: MonadIO m => ClientRect -> m Float
+getTop = error "getTop only available in ghcjs"
+
+getLeft :: MonadIO m => ClientRect -> m Float
+getLeft = error "getLeft only available in ghcjs"
+data ClientRect
 #endif

@@ -25,6 +25,7 @@ it also allows selecting multiple rectangular regions in the image (this should 
 
 module Thumbnail where
 
+{-
 import           Control.Applicative
 import           Control.Arrow
 import           Control.Lens
@@ -565,3 +566,4 @@ nextKey m = head ([0..length m] \\ Map.keys m)
 --       -- We'll just invert imageSpaceToWidgetSpace
 --   in  ((x'+xOff)*widNat/widGeom/zm,
 --        (y'+yOff)*heiNat/heiGeom/zm)
+-}

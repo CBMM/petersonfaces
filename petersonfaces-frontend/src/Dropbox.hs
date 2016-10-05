@@ -23,8 +23,8 @@ import Reflex.Dom
 import Servant.API
 import Servant.Reflex
 
-listFolder :: MonadWidget t m => Event t T.Text -> m (Event t (ReqResult a))
-listFolder = undefined
+listFolder :: forall t m.MonadWidget t m => Event t T.Text -> m (Event t (ReqResult a))
+listFolder = client 
 
 
 type DropboxApi = "2" :> "files" :> Header "Authorization" DropboxBearer :>

@@ -17,7 +17,6 @@ Portability: GHCJS
 {-# language RankNTypes #-}
 {-# language TypeFamilies #-}
 {-# language OverloadedStrings #-}
-{-# language TemplateHaskell #-}
 {-# language TupleSections #-}
 {-# language ScopedTypeVariables #-}
 
